@@ -58,8 +58,12 @@ def test_project_adapter_creates_disposable_git_worktree(tmp_path: Path, monkeyp
     assert manifest["workspace_mode"] == "disposable_git_worktree"
     assert manifest["routellect_repo_root"] == str(repo_root)
     assert manifest["routellect_worktree_root"] == str(worktree_root)
+    assert manifest["branch_name"].startswith("harness/")
     assert workspace.environment["ROUTELLECT_REPO_ROOT"] == str(worktree_root)
     assert workspace.environment["ROUTELLECT_SOURCE_REPO_ROOT"] == str(repo_root)
+    assert workspace.branch_name == manifest["branch_name"]
+    assert workspace.source_repo_root == repo_root
+    assert workspace.workspace_mode == "git_worktree"
 
     result = subprocess.run(
         ["git", "rev-parse", "--show-toplevel"],
@@ -69,6 +73,14 @@ def test_project_adapter_creates_disposable_git_worktree(tmp_path: Path, monkeyp
         text=True,
     )
     assert Path(result.stdout.strip()) == worktree_root
+    branch = subprocess.run(
+        ["git", "rev-parse", "--abbrev-ref", "HEAD"],
+        cwd=worktree_root,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    assert branch.stdout.strip() == workspace.branch_name
 
 
 def test_project_adapter_changes_in_worktree_do_not_dirty_source_repo(tmp_path: Path, monkeypatch) -> None:

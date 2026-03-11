@@ -27,7 +27,8 @@ class RoutellectProjectAdapter:
         workspace = run_dir / "workspace"
         if workspace.exists():
             raise RuntimeError(f"Refusing to reuse existing workspace path: {workspace}")
-        self._create_disposable_worktree(source_repo_root, workspace)
+        branch_name = self._worktree_branch_name(project.id, task.id, run.id)
+        self._create_disposable_worktree(source_repo_root, workspace, branch_name)
         manifest_path = run_dir / "routellect_workspace_manifest.json"
         docs = [path for path in (source_repo_root / "README.md", source_repo_root / "pyproject.toml") if path.exists()]
         manifest_path.write_text(
@@ -41,6 +42,7 @@ class RoutellectProjectAdapter:
                     "reason": "Blocked or failed runs must never dirty the main Routellect checkout.",
                     "routellect_repo_root": str(source_repo_root),
                     "routellect_worktree_root": str(workspace),
+                    "branch_name": branch_name,
                     "brain_sources": [str(path) for path in docs],
                 },
                 indent=2,
@@ -50,26 +52,31 @@ class RoutellectProjectAdapter:
         )
         return ProjectWorkspace(
             project_root=workspace,
+            workspace_mode="git_worktree",
+            source_repo_root=source_repo_root,
+            branch_name=branch_name,
             metadata_files=[manifest_path, *docs],
             environment={
                 "ACCRUVIA_PROJECT_WORKSPACE": str(workspace),
                 "ACCRUVIA_PROJECT_MANIFEST_PATH": str(manifest_path),
                 "ROUTELLECT_REPO_ROOT": str(workspace),
                 "ROUTELLECT_SOURCE_REPO_ROOT": str(source_repo_root),
+                "ROUTELLECT_WORKTREE_BRANCH": branch_name,
             },
             diagnostics={
                 "project_adapter": self.name,
                 "workspace_mode": "disposable_git_worktree",
                 "routellect_repo_root": str(source_repo_root),
                 "routellect_worktree_root": str(workspace),
+                "branch_name": branch_name,
             },
         )
 
     @staticmethod
-    def _create_disposable_worktree(source_repo_root: Path, workspace: Path) -> None:
+    def _create_disposable_worktree(source_repo_root: Path, workspace: Path, branch_name: str) -> None:
         workspace.parent.mkdir(parents=True, exist_ok=True)
         result = subprocess.run(
-            ["git", "worktree", "add", "--detach", str(workspace), "HEAD"],
+            ["git", "worktree", "add", "-b", branch_name, str(workspace), "HEAD"],
             cwd=str(source_repo_root),
             capture_output=True,
             text=True,
@@ -80,6 +87,11 @@ class RoutellectProjectAdapter:
                 "Failed to create disposable Routellect worktree: "
                 f"{result.stderr.strip() or result.stdout.strip() or 'unknown git worktree error'}"
             )
+
+    @staticmethod
+    def _worktree_branch_name(project_id: str, task_id: str, run_id: str) -> str:
+        raw = f"harness/{project_id}/{task_id}/{run_id}"
+        return re.sub(r"[^A-Za-z0-9._/-]+", "-", raw)
 
     def build_worker(self, project, task, run, workspace, default_worker):
         from accruvia_harness.workers import ShellCommandWorker
