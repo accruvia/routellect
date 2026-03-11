@@ -77,31 +77,51 @@ class TelemetryPayload:
         }
 
 
+def get_identity_dir() -> Path:
+    """Get the canonical identity storage directory (~/.routellect)."""
+    identity_dir = Path.home() / ".routellect"
+    identity_dir.mkdir(parents=True, exist_ok=True)
+    return identity_dir
+
+
 def get_routellect_dir() -> Path:
-    """Get the Routellect config directory (~/.routellect)."""
-    routellect_dir = Path.home() / ".routellect"
-    routellect_dir.mkdir(parents=True, exist_ok=True)
-    return routellect_dir
+    """Backward-compatible alias for the Routellect config directory helper."""
+    return get_identity_dir()
+
+
+def get_legacy_identity_dir() -> Path:
+    """Get the legacy identity storage directory (~/.accruvia)."""
+    return Path.home() / ".accruvia"
 
 
 def get_legacy_accruvia_dir() -> Path:
-    """Get the legacy Accruvia config directory (~/.accruvia)."""
-    return Path.home() / ".accruvia"
+    """Backward-compatible alias for the legacy Accruvia config directory helper."""
+    return get_legacy_identity_dir()
 
 
 def get_accruvia_dir() -> Path:
     """Backward-compatible alias for the legacy helper name."""
-    return get_routellect_dir()
+    return get_identity_dir()
+
+
+def get_identity_path() -> Path:
+    """Get path to the canonical client identity file."""
+    return get_identity_dir() / "client_id"
 
 
 def get_client_id_path() -> Path:
-    """Get path to client ID file."""
-    return get_routellect_dir() / "client_id"
+    """Backward-compatible alias for the client identity file helper."""
+    return get_identity_path()
+
+
+def get_legacy_identity_path() -> Path:
+    """Get path to the legacy client identity file."""
+    return get_legacy_identity_dir() / "client_id"
 
 
 def get_legacy_client_id_path() -> Path:
-    """Get path to the legacy client ID file."""
-    return get_legacy_accruvia_dir() / "client_id"
+    """Backward-compatible alias for the legacy client identity file helper."""
+    return get_legacy_identity_path()
 
 
 def get_or_create_client_uuid() -> str:
@@ -114,8 +134,8 @@ def get_or_create_client_uuid() -> str:
     Returns:
         The client UUID as a string.
     """
-    client_id_path = get_client_id_path()
-    legacy_client_id_path = get_legacy_client_id_path()
+    client_id_path = get_identity_path()
+    legacy_client_id_path = get_legacy_identity_path()
 
     if client_id_path.exists():
         try:

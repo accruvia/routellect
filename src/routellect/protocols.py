@@ -5,7 +5,7 @@ Hosted services or downstream applications may implement them, but the core
 package should not depend on any proprietary deployment shape.
 """
 
-from abc import ABC, abstractmethod
+from abc import ABC, abstractmethod, update_abstractmethods
 from dataclasses import dataclass
 from enum import Enum
 from typing import Protocol, runtime_checkable
@@ -158,6 +158,23 @@ class FederatedEngineProtocol(ABC):
     This is an ABC (not Protocol) because it has shared implementation.
     """
 
+    def __init_subclass__(cls, **kwargs) -> None:
+        super().__init_subclass__(**kwargs)
+
+        # Preserve compatibility for subclasses that still implement the
+        # legacy Accruvia-named method, while making the Routellect-named
+        # method the canonical abstract interface.
+        subclass_dict = cls.__dict__
+        implements_new = "get_routellect_weight" in subclass_dict
+        implements_legacy = "get_accruvia_weight" in subclass_dict
+
+        if implements_legacy and not implements_new:
+            cls.get_routellect_weight = cls.get_accruvia_weight
+        elif implements_new and not implements_legacy:
+            cls.get_accruvia_weight = cls.get_routellect_weight
+
+        update_abstractmethods(cls)
+
     @abstractmethod
     def blend_recommendations(
         self,
@@ -193,18 +210,18 @@ class FederatedEngineProtocol(ABC):
         """
         pass
 
+    @abstractmethod
     def get_routellect_weight(self, population_type: str) -> float:
         """Get current weight for hosted Routellect recommendations.
 
         Returns:
             Weight between 0.0 and 1.0
         """
-        return self.get_accruvia_weight(population_type)
+        raise NotImplementedError
 
-    @abstractmethod
     def get_accruvia_weight(self, population_type: str) -> float:
         """Backward-compatible alias for old extracted implementations."""
-        pass
+        return self.get_routellect_weight(population_type)
 
 
 # Backward-compatible alias for extracted code that still uses the old name.

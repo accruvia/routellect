@@ -7,11 +7,20 @@ import routellect
 from routellect.identity import (
     get_accruvia_dir,
     get_client_id_path,
+    get_identity_dir,
+    get_identity_path,
     get_legacy_client_id_path,
+    get_legacy_identity_dir,
+    get_legacy_identity_path,
     get_or_create_client_uuid,
     get_routellect_dir,
 )
-from routellect.protocols import AccruviaServiceProtocol, RecommendationSource, RoutellectServiceProtocol
+from routellect.protocols import (
+    AccruviaServiceProtocol,
+    FederatedEngineProtocol,
+    RecommendationSource,
+    RoutellectServiceProtocol,
+)
 from routellect.server_client import (
     AccruviaServerClient,
     DEFAULT_SERVER_URL,
@@ -45,6 +54,36 @@ def test_public_package_reexports_protocol_contracts():
 
 def test_public_protocol_exports_include_neutral_name():
     assert RoutellectServiceProtocol is AccruviaServiceProtocol
+
+
+def test_federated_engine_protocol_accepts_neutral_and_legacy_weight_methods():
+    class NeutralEngine(FederatedEngineProtocol):
+        def blend_recommendations(self, local, remote, population_type):  # pragma: no cover - behavior tested below
+            return local
+
+        def update_weights(self, population_type, local_was_correct, remote_was_correct):  # pragma: no cover
+            return None
+
+        def get_routellect_weight(self, population_type: str) -> float:
+            return 0.75
+
+    class LegacyEngine(FederatedEngineProtocol):
+        def blend_recommendations(self, local, remote, population_type):  # pragma: no cover - behavior tested below
+            return remote
+
+        def update_weights(self, population_type, local_was_correct, remote_was_correct):  # pragma: no cover
+            return None
+
+        def get_accruvia_weight(self, population_type: str) -> float:
+            return 0.25
+
+    neutral_engine = NeutralEngine()
+    legacy_engine = LegacyEngine()
+
+    assert neutral_engine.get_routellect_weight("default") == 0.75
+    assert neutral_engine.get_accruvia_weight("default") == 0.75
+    assert legacy_engine.get_routellect_weight("default") == 0.25
+    assert legacy_engine.get_accruvia_weight("default") == 0.25
 
 
 def test_recommendation_source_keeps_legacy_alias():
@@ -84,7 +123,7 @@ def test_route_result_maps_legacy_and_neutral_remote_sources():
 
 def test_identity_prefers_routellect_dir_and_migrates_legacy_value(monkeypatch, tmp_path: Path):
     monkeypatch.setattr(Path, "home", lambda: tmp_path)
-    legacy_path = get_legacy_client_id_path()
+    legacy_path = get_legacy_identity_path()
     legacy_path.parent.mkdir(parents=True, exist_ok=True)
     legacy_uuid = "11111111-1111-4111-8111-111111111111"
     legacy_path.write_text(legacy_uuid, encoding="utf-8")
@@ -92,8 +131,10 @@ def test_identity_prefers_routellect_dir_and_migrates_legacy_value(monkeypatch, 
     migrated_uuid = get_or_create_client_uuid()
 
     assert migrated_uuid == legacy_uuid
-    assert get_routellect_dir() == tmp_path / ".routellect"
-    assert get_client_id_path().read_text(encoding="utf-8") == legacy_uuid
+    assert get_identity_dir() == tmp_path / ".routellect"
+    assert get_routellect_dir() == get_identity_dir()
+    assert get_identity_path().read_text(encoding="utf-8") == legacy_uuid
+    assert get_client_id_path() == get_identity_path()
 
 
 def test_identity_keeps_current_client_id_when_legacy_value_exists(monkeypatch, tmp_path: Path):
@@ -101,9 +142,9 @@ def test_identity_keeps_current_client_id_when_legacy_value_exists(monkeypatch, 
     current_uuid = "22222222-2222-4222-8222-222222222222"
     legacy_uuid = "33333333-3333-4333-8333-333333333333"
 
-    current_path = get_client_id_path()
+    current_path = get_identity_path()
     current_path.write_text(current_uuid, encoding="utf-8")
-    legacy_path = get_legacy_client_id_path()
+    legacy_path = get_legacy_identity_path()
     legacy_path.parent.mkdir(parents=True, exist_ok=True)
     legacy_path.write_text(legacy_uuid, encoding="utf-8")
 
@@ -113,9 +154,9 @@ def test_identity_keeps_current_client_id_when_legacy_value_exists(monkeypatch, 
 
 def test_identity_recovers_from_corrupt_current_id_using_valid_legacy_id(monkeypatch, tmp_path: Path):
     monkeypatch.setattr(Path, "home", lambda: tmp_path)
-    current_path = get_client_id_path()
+    current_path = get_identity_path()
     current_path.write_text("not-a-uuid", encoding="utf-8")
-    legacy_path = get_legacy_client_id_path()
+    legacy_path = get_legacy_identity_path()
     legacy_path.parent.mkdir(parents=True, exist_ok=True)
     legacy_uuid = "44444444-4444-4444-8444-444444444444"
     legacy_path.write_text(legacy_uuid, encoding="utf-8")
@@ -128,9 +169,9 @@ def test_identity_recovers_from_corrupt_current_id_using_valid_legacy_id(monkeyp
 
 def test_identity_regenerates_when_current_and_legacy_ids_are_invalid(monkeypatch, tmp_path: Path):
     monkeypatch.setattr(Path, "home", lambda: tmp_path)
-    current_path = get_client_id_path()
+    current_path = get_identity_path()
     current_path.write_text("broken-current", encoding="utf-8")
-    legacy_path = get_legacy_client_id_path()
+    legacy_path = get_legacy_identity_path()
     legacy_path.parent.mkdir(parents=True, exist_ok=True)
     legacy_path.write_text("broken-legacy", encoding="utf-8")
 
@@ -145,7 +186,9 @@ def test_identity_regenerates_when_current_and_legacy_ids_are_invalid(monkeypatc
 def test_legacy_accruvia_dir_alias_points_at_routellect_dir(monkeypatch, tmp_path: Path):
     monkeypatch.setattr(Path, "home", lambda: tmp_path)
 
-    assert get_accruvia_dir() == get_routellect_dir()
+    assert get_accruvia_dir() == get_identity_dir()
+    assert get_routellect_dir() == get_identity_dir()
+    assert get_legacy_identity_dir() == get_legacy_client_id_path().parent
 
 
 def test_client_factory_uses_hosted_router_client():
