@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import signal
 import subprocess
 from pathlib import Path
 
@@ -114,3 +115,58 @@ def test_harness_worker_extends_timeout_when_progress_is_observed(tmp_path: Path
     assert report["executor_timed_out"] is False
     assert report["executor_timeout_details"]["progress_observed"] is True
     assert report["executor_timeout_details"]["extension_used_seconds"] > 0
+
+
+def test_harness_worker_blocks_when_changes_escape_scope(tmp_path: Path, monkeypatch) -> None:
+    project_root = tmp_path / "repo"
+    project_root.mkdir()
+    _init_repo(project_root)
+    run_dir = tmp_path / "run"
+    run_dir.mkdir()
+
+    monkeypatch.setenv("ROUTELLECT_HARNESS_WORKER_COMMAND", "printf '\\n# oops\\n' >> README.md")
+    monkeypatch.setenv(
+        "ACCRUVIA_TASK_SCOPE_JSON",
+        json.dumps({"allowed_paths": ["src", "tests"], "forbidden_paths": ["README.md"]}),
+    )
+
+    report = run_worker(project_root=project_root, run_dir=run_dir, objective="Stay in scope")
+
+    assert report["worker_outcome"] == "blocked"
+    assert report["scope_violation"]["forbidden_path_hits"] == ["README.md"]
+
+
+def test_harness_worker_kills_process_group_on_timeout(monkeypatch, tmp_path: Path) -> None:
+    class FakeProc:
+        def __init__(self) -> None:
+            self.pid = 4242
+            self.returncode = None
+            self._wait_calls = 0
+
+        def poll(self):
+            return None
+
+        def wait(self, timeout=None):
+            self._wait_calls += 1
+            if timeout is not None and self._wait_calls == 1:
+                raise subprocess.TimeoutExpired(cmd="fake", timeout=timeout)
+            self.returncode = -signal.SIGKILL
+            return self.returncode
+
+    proc = FakeProc()
+    signals: list[tuple[int, int]] = []
+    monkeypatch.setattr(harness_worker.subprocess, "Popen", lambda *a, **k: proc)
+    monkeypatch.setattr(harness_worker.os, "killpg", lambda pid, sig: signals.append((pid, sig)))
+    monkeypatch.setattr(harness_worker, "_git_changed_files_for_progress", lambda *_args, **_kwargs: [])
+    monkeypatch.setattr(harness_worker, "DEFAULT_EXECUTOR_TIMEOUT_SECONDS", 0.0)
+    monkeypatch.setattr(harness_worker, "DEFAULT_EXECUTOR_IDLE_TIMEOUT_SECONDS", 0.0)
+    monkeypatch.setattr(harness_worker, "DEFAULT_EXECUTOR_MAX_EXTENSION_SECONDS", 0.0)
+    monkeypatch.setattr(harness_worker, "DEFAULT_EXECUTOR_POLL_SECONDS", 0.0)
+
+    run_dir = tmp_path / "run"
+    run_dir.mkdir()
+    completed, timed_out, _ = harness_worker._run_command_with_progress("fake", tmp_path, run_dir)
+
+    assert timed_out is True
+    assert completed.returncode == 124
+    assert signals == [(4242, signal.SIGTERM), (4242, signal.SIGKILL)]

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import signal
 import shlex
 import subprocess
 import sys
@@ -70,6 +71,7 @@ def _run_command_with_progress(command: str, cwd: Path, run_dir: Path) -> tuple[
             stdout=stdout_handle,
             stderr=stderr_handle,
             text=True,
+            preexec_fn=os.setsid,
         )
 
         timed_out = False
@@ -91,8 +93,12 @@ def _run_command_with_progress(command: str, cwd: Path, run_dir: Path) -> tuple[
 
             if now >= hard_deadline:
                 timed_out = True
-                process.kill()
-                process.wait()
+                os.killpg(process.pid, signal.SIGTERM)
+                try:
+                    process.wait(timeout=2)
+                except subprocess.TimeoutExpired:
+                    os.killpg(process.pid, signal.SIGKILL)
+                    process.wait()
                 break
 
             if now >= soft_deadline:
@@ -105,8 +111,12 @@ def _run_command_with_progress(command: str, cwd: Path, run_dir: Path) -> tuple[
                     soft_deadline = now + extension_step
                 else:
                     timed_out = True
-                    process.kill()
-                    process.wait()
+                    os.killpg(process.pid, signal.SIGTERM)
+                    try:
+                        process.wait(timeout=2)
+                    except subprocess.TimeoutExpired:
+                        os.killpg(process.pid, signal.SIGKILL)
+                        process.wait()
                     break
 
             time.sleep(DEFAULT_EXECUTOR_POLL_SECONDS)
@@ -147,6 +157,43 @@ def _executor_command(prompt: str) -> str:
         return override
     quoted_prompt = shlex.quote(prompt)
     return f"codex exec --dangerously-bypass-approvals-and-sandbox {quoted_prompt}"
+
+
+def _load_scope() -> dict[str, object]:
+    raw = os.environ.get("ACCRUVIA_TASK_SCOPE_JSON", "").strip()
+    if not raw:
+        return {}
+    try:
+        payload = json.loads(raw)
+    except json.JSONDecodeError:
+        return {}
+    return payload if isinstance(payload, dict) else {}
+
+
+def _scope_violation(changed_files: list[str], scope: dict[str, object]) -> dict[str, object] | None:
+    allowed = [str(item) for item in scope.get("allowed_paths", []) if item]
+    forbidden = [str(item) for item in scope.get("forbidden_paths", []) if item]
+    if not allowed and not forbidden:
+        return None
+
+    outside_allowed: list[str] = []
+    forbidden_hits: list[str] = []
+    if allowed:
+        for path in changed_files:
+            if not any(path == item or path.startswith(f"{item.rstrip('/')}/") for item in allowed):
+                outside_allowed.append(path)
+    if forbidden:
+        for path in changed_files:
+            if any(path == item or path.startswith(f"{item.rstrip('/')}/") for item in forbidden):
+                forbidden_hits.append(path)
+    if outside_allowed or forbidden_hits:
+        return {
+            "allowed_paths": allowed,
+            "forbidden_paths": forbidden,
+            "outside_allowed_paths": outside_allowed,
+            "forbidden_path_hits": forbidden_hits,
+        }
+    return None
 
 
 def _write_plan(run_dir: Path, objective: str, project_root: Path) -> Path:
@@ -229,6 +276,8 @@ def run_worker(project_root: Path, run_dir: Path, objective: str) -> dict[str, o
     compile_check = _run_compile_check(project_root)
     test_check = _run_test_check(project_root)
     changed_files = _git_changed_files(project_root)
+    scope = _load_scope()
+    scope_violation = _scope_violation(changed_files, scope)
 
     if timed_out:
         outcome = "failed"
@@ -236,6 +285,9 @@ def run_worker(project_root: Path, run_dir: Path, objective: str) -> dict[str, o
     elif execution.returncode != 0:
         outcome = "failed"
         summary = "Worker executor failed."
+    elif scope_violation is not None:
+        outcome = "blocked"
+        summary = "Worker changed files outside the task scope."
     elif not changed_files:
         outcome = "blocked"
         summary = "Worker made no repository changes."
@@ -255,6 +307,8 @@ def run_worker(project_root: Path, run_dir: Path, objective: str) -> dict[str, o
         "executor_returncode": execution.returncode,
         "executor_timed_out": timed_out,
         "executor_timeout_details": timeout_details,
+        "task_scope": scope,
+        "scope_violation": scope_violation,
         "changed_files": changed_files,
         "compile_check": compile_check,
         "test_check": test_check,
