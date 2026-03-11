@@ -23,13 +23,19 @@ from routellect.protocols import (
 )
 from routellect.server_client import (
     AccruviaServerClient,
+    DEFAULT_HOSTED_SERVICE_URL,
     DEFAULT_SERVER_URL,
     DEFAULT_TIMEOUT,
     DEV_SERVER_URL,
+    HostedServiceClient,
+    HostedServiceClientConfig,
     HostedRouterClient,
+    LOCAL_SCAFFOLD_URL,
     RouteResult,
     create_client,
     create_dev_client,
+    create_hosted_service_client,
+    create_local_scaffold_client,
     create_scaffold_client,
 )
 
@@ -92,17 +98,22 @@ def test_recommendation_source_keeps_legacy_alias():
 
 
 def test_hosted_router_client_keeps_legacy_alias():
+    assert HostedServiceClient is HostedRouterClient
     assert HostedRouterClient is AccruviaServerClient
 
 
 def test_default_server_url_is_local_scaffold():
+    assert DEFAULT_HOSTED_SERVICE_URL == "http://localhost:8000"
+    assert LOCAL_SCAFFOLD_URL == DEFAULT_HOSTED_SERVICE_URL
     assert DEFAULT_SERVER_URL == "http://localhost:8000"
     assert DEV_SERVER_URL == DEFAULT_SERVER_URL
 
 
 def test_default_hosted_client_config_stays_local_scaffold():
-    client = HostedRouterClient()
+    client = HostedServiceClient()
 
+    assert isinstance(client.config, HostedServiceClientConfig)
+    assert client.config.service_url == DEFAULT_HOSTED_SERVICE_URL
     assert client.config.server_url == DEFAULT_SERVER_URL
     assert client.config.timeout == DEFAULT_TIMEOUT
     assert client.config.retries == 3
@@ -192,20 +203,42 @@ def test_legacy_accruvia_dir_alias_points_at_routellect_dir(monkeypatch, tmp_pat
 
 
 def test_client_factory_uses_hosted_router_client():
-    client = create_client()
+    client = create_hosted_service_client()
+    legacy_client = create_client()
+    scaffold_client = create_local_scaffold_client()
     dev_client = create_dev_client()
+
+    assert isinstance(client, HostedServiceClient)
+    assert isinstance(legacy_client, HostedServiceClient)
+    assert isinstance(scaffold_client, HostedServiceClient)
     assert isinstance(client, HostedRouterClient)
     assert isinstance(dev_client, HostedRouterClient)
 
 
 def test_scaffold_factories_preserve_local_dev_posture():
     client = create_client()
+    canonical_client = create_hosted_service_client()
     scaffold_client = create_scaffold_client()
+    local_scaffold_client = create_local_scaffold_client()
     dev_client = create_dev_client()
 
+    assert canonical_client.config.service_url == DEFAULT_HOSTED_SERVICE_URL
+    assert canonical_client.config.timeout == DEFAULT_TIMEOUT
     assert client.config.server_url == DEFAULT_SERVER_URL
     assert client.config.timeout == DEFAULT_TIMEOUT
+    assert local_scaffold_client.config.service_url == LOCAL_SCAFFOLD_URL
+    assert local_scaffold_client.config.timeout == 10.0
     assert scaffold_client.config.server_url == DEV_SERVER_URL
     assert scaffold_client.config.timeout == 10.0
     assert dev_client.config.server_url == DEV_SERVER_URL
     assert dev_client.config.timeout == 10.0
+
+
+def test_hosted_service_config_accepts_canonical_and_legacy_url_names():
+    canonical_config = HostedServiceClientConfig(service_url="https://hosted.example")
+    legacy_config = HostedServiceClientConfig(server_url="https://legacy.example")
+
+    assert canonical_config.service_url == "https://hosted.example"
+    assert canonical_config.server_url == "https://hosted.example"
+    assert legacy_config.service_url == "https://legacy.example"
+    assert legacy_config.server_url == "https://legacy.example"

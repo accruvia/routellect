@@ -1,17 +1,17 @@
-"""Optional HTTP client for a hosted Routellect routing service.
+"""Optional hosted-service client scaffolding for Routellect.
 
-This client is scaffolding to accelerate local and downstream integrations.
-It is not the durable center of the OSS package and should be treated as an
-optional hosted-service adapter.
+The canonical surface in this module is organized around hosted-service
+integration and local scaffold helpers. Compatibility aliases remain for
+older extracted callers that still import server-centric names.
 """
 
 import logging
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import UTC, datetime
 
 import httpx
 
-from routellect.identity import TelemetryPayload, build_execution_proof
+from routellect.identity import build_execution_proof
 from routellect.protocols import (
     Recommendation,
     RecommendationSource,
@@ -19,11 +19,11 @@ from routellect.protocols import (
 
 logger = logging.getLogger(__name__)
 
-# Default scaffold server URL
-DEFAULT_SERVER_URL = "http://localhost:8000"
+# Default hosted-service URL used by the local scaffold.
+DEFAULT_HOSTED_SERVICE_URL = "http://localhost:8000"
 
-# Development server URL
-DEV_SERVER_URL = "http://localhost:8000"
+# Local scaffold URL for development and extracted integrations.
+LOCAL_SCAFFOLD_URL = DEFAULT_HOSTED_SERVICE_URL
 
 # Request timeout in seconds
 DEFAULT_TIMEOUT = 30.0
@@ -32,15 +32,43 @@ DEFAULT_TIMEOUT = 30.0
 DEFAULT_RETRIES = 3
 
 
-@dataclass
-class ServerClientConfig:
-    """Configuration for the optional hosted routing client."""
+@dataclass(init=False)
+class HostedServiceClientConfig:
+    """Configuration for the optional hosted-service client."""
 
-    server_url: str = DEFAULT_SERVER_URL
-    timeout: float = DEFAULT_TIMEOUT
-    retries: int = DEFAULT_RETRIES
-    verify_ssl: bool = True
-    api_key: str | None = None
+    service_url: str
+    timeout: float
+    retries: int
+    verify_ssl: bool
+    api_key: str | None
+
+    def __init__(
+        self,
+        service_url: str = DEFAULT_HOSTED_SERVICE_URL,
+        timeout: float = DEFAULT_TIMEOUT,
+        retries: int = DEFAULT_RETRIES,
+        verify_ssl: bool = True,
+        api_key: str | None = None,
+        *,
+        server_url: str | None = None,
+    ) -> None:
+        if server_url is not None:
+            service_url = server_url
+
+        self.service_url = service_url
+        self.timeout = timeout
+        self.retries = retries
+        self.verify_ssl = verify_ssl
+        self.api_key = api_key
+
+    @property
+    def server_url(self) -> str:
+        """Backward-compatible alias for older callers."""
+        return self.service_url
+
+    @server_url.setter
+    def server_url(self, value: str) -> None:
+        self.service_url = value
 
 
 @dataclass
@@ -80,15 +108,15 @@ class SettleResult:
     message: str
 
 
-class HostedRouterClient:
+class HostedServiceClient:
     """HTTP client implementing the hosted routing service protocol.
 
     Connects to an optional hosted service for model recommendations and
     outcome reporting. Falls back gracefully when the service is unavailable.
     """
 
-    def __init__(self, config: ServerClientConfig | None = None) -> None:
-        self.config = config or ServerClientConfig()
+    def __init__(self, config: HostedServiceClientConfig | None = None) -> None:
+        self.config = config or HostedServiceClientConfig()
         self._client: httpx.AsyncClient | None = None
         self._sync_client: httpx.Client | None = None
         self._pending_tasks: dict[str, dict] = {}
@@ -107,7 +135,7 @@ class HostedRouterClient:
         """Get or create async HTTP client."""
         if self._client is None:
             self._client = httpx.AsyncClient(
-                base_url=self.config.server_url,
+                base_url=self.config.service_url,
                 timeout=self.config.timeout,
                 verify=self.config.verify_ssl,
                 headers=self._get_headers(),
@@ -118,7 +146,7 @@ class HostedRouterClient:
         """Get or create sync HTTP client."""
         if self._sync_client is None:
             self._sync_client = httpx.Client(
-                base_url=self.config.server_url,
+                base_url=self.config.service_url,
                 timeout=self.config.timeout,
                 verify=self.config.verify_ssl,
                 headers=self._get_headers(),
@@ -353,38 +381,83 @@ class HostedRouterClient:
             return False
 
 
-def create_client(
-    server_url: str = DEFAULT_SERVER_URL,
+def create_hosted_service_client(
+    service_url: str = DEFAULT_HOSTED_SERVICE_URL,
     api_key: str | None = None,
     timeout: float = DEFAULT_TIMEOUT,
-) -> HostedRouterClient:
+) -> HostedServiceClient:
     """Create an optional hosted routing client.
 
     Args:
-        server_url: Hosted service URL.
+        service_url: Hosted service URL.
         api_key: Optional API key for authentication.
         timeout: Request timeout in seconds.
 
     Returns:
-        Configured HostedRouterClient.
+        Configured HostedServiceClient.
     """
-    config = ServerClientConfig(
-        server_url=server_url,
+    config = HostedServiceClientConfig(
+        service_url=service_url,
         api_key=api_key,
         timeout=timeout,
     )
-    return HostedRouterClient(config)
+    return HostedServiceClient(config)
 
 
-def create_scaffold_client() -> HostedRouterClient:
-    """Create a client for the local scaffold server."""
-    return create_client(server_url=DEV_SERVER_URL, timeout=10.0)
+def create_local_scaffold_client() -> HostedServiceClient:
+    """Create a client for the local hosted-service scaffold."""
+    return create_hosted_service_client(service_url=LOCAL_SCAFFOLD_URL, timeout=10.0)
 
 
-# Backward-compatible aliases for the extracted codebase.
-AccruviaServerClient = HostedRouterClient
+def create_client(
+    server_url: str = DEFAULT_HOSTED_SERVICE_URL,
+    api_key: str | None = None,
+    timeout: float = DEFAULT_TIMEOUT,
+) -> HostedServiceClient:
+    """Backward-compatible alias for older server-centric helpers."""
+    return create_hosted_service_client(
+        service_url=server_url,
+        api_key=api_key,
+        timeout=timeout,
+    )
 
 
-def create_dev_client() -> HostedRouterClient:
+def create_scaffold_client() -> HostedServiceClient:
+    """Backward-compatible alias for the local scaffold helper."""
+    return create_local_scaffold_client()
+
+
+def create_dev_client() -> HostedServiceClient:
     """Backward-compatible alias for the old helper name."""
     return create_scaffold_client()
+
+
+# Canonical names exported by this module.
+HostedRouterClient = HostedServiceClient
+ServerClientConfig = HostedServiceClientConfig
+DEFAULT_SERVER_URL = DEFAULT_HOSTED_SERVICE_URL
+DEV_SERVER_URL = LOCAL_SCAFFOLD_URL
+
+# Backward-compatible aliases for the extracted codebase.
+AccruviaServerClient = HostedServiceClient
+
+__all__ = [
+    "DEFAULT_HOSTED_SERVICE_URL",
+    "LOCAL_SCAFFOLD_URL",
+    "DEFAULT_TIMEOUT",
+    "DEFAULT_RETRIES",
+    "HostedServiceClientConfig",
+    "HostedServiceClient",
+    "RouteResult",
+    "SettleResult",
+    "create_hosted_service_client",
+    "create_local_scaffold_client",
+    "DEFAULT_SERVER_URL",
+    "DEV_SERVER_URL",
+    "ServerClientConfig",
+    "HostedRouterClient",
+    "AccruviaServerClient",
+    "create_client",
+    "create_scaffold_client",
+    "create_dev_client",
+]
