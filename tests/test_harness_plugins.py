@@ -54,3 +54,4 @@ def test_project_adapter_worker_preserves_command_passthrough(tmp_path: Path, mo
     worker = adapter.build_worker(_Project(), _Task(), _Run(), workspace, default_worker=None)
 
     assert "ROUTELLECT_HARNESS_WORKER_COMMAND" in worker.env_passthrough
+    assert "harness_worker.py" in worker.command

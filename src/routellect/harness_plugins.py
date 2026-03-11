@@ -3,6 +3,8 @@ from __future__ import annotations
 import json
 import os
 import re
+import shlex
+import sys
 from dataclasses import asdict
 from pathlib import Path
 
@@ -56,9 +58,10 @@ class RoutellectProjectAdapter:
     def build_worker(self, project, task, run, workspace, default_worker):
         from accruvia_harness.workers import ShellCommandWorker
 
+        default_entrypoint = f"{shlex.quote(sys.executable)} {shlex.quote(str(Path(__file__).with_name('harness_worker.py')))}"
         command = os.environ.get(
             "ROUTELLECT_HARNESS_WORKER_ENTRYPOINT",
-            "./.venv/bin/python -m routellect.harness_worker",
+            default_entrypoint,
         )
         return ShellCommandWorker(
             command,
