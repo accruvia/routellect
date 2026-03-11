@@ -24,6 +24,25 @@ It is intended to be usable on its own:
 
 Those belong in a harness or downstream application.
 
+## Harness Integration
+
+`Routellect` ships an optional harness plugin module at `routellect.harness_plugins`.
+
+It provides:
+
+- a project adapter for preparing a Routellect workspace
+- a cognition adapter for project heartbeat reviews
+
+When used with `accruvia-harness`, load it with:
+
+```bash
+export ACCRUVIA_PROJECT_ADAPTER_MODULES=routellect.harness_plugins
+export ACCRUVIA_COGNITION_MODULES=routellect.harness_plugins
+export ROUTELLECT_REPO_ROOT=/path/to/routellect
+```
+
+That plugin surface is optional. `Routellect` still works as a standalone package without the harness.
+
 ## Temporary Server Support
 
 This repo includes a lightweight server client surface to keep developer velocity high while the surrounding system is being split apart.
