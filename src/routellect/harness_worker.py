@@ -7,6 +7,9 @@ import subprocess
 import sys
 from pathlib import Path
 
+DEFAULT_EXECUTOR_TIMEOUT_SECONDS = 120
+DEFAULT_VALIDATION_TIMEOUT_SECONDS = 60
+
 
 def _python_command(project_root: Path) -> list[str]:
     repo_python = project_root / ".venv" / "bin" / "python"
@@ -15,7 +18,7 @@ def _python_command(project_root: Path) -> list[str]:
     return [sys.executable]
 
 
-def _run_command(command: str, cwd: Path) -> subprocess.CompletedProcess[str]:
+def _run_command(command: str, cwd: Path, timeout: int | None = None) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
         command,
         shell=True,
@@ -23,21 +26,23 @@ def _run_command(command: str, cwd: Path) -> subprocess.CompletedProcess[str]:
         capture_output=True,
         text=True,
         check=False,
+        timeout=timeout,
     )
 
 
-def _run_subprocess(args: list[str], cwd: Path) -> subprocess.CompletedProcess[str]:
+def _run_subprocess(args: list[str], cwd: Path, timeout: int | None = None) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
         args,
         cwd=str(cwd),
         capture_output=True,
         text=True,
         check=False,
+        timeout=timeout,
     )
 
 
 def _git_changed_files(project_root: Path) -> list[str]:
-    result = _run_subprocess(["git", "status", "--porcelain"], project_root)
+    result = _run_subprocess(["git", "status", "--porcelain"], project_root, timeout=10)
     changed: list[str] = []
     for line in result.stdout.splitlines():
         if not line.strip():
@@ -72,7 +77,21 @@ def _run_compile_check(project_root: Path) -> dict[str, object]:
     src_root = project_root / "src"
     if not src_root.exists():
         return {"passed": True, "framework": "none", "returncode": 0, "stdout": "", "stderr": ""}
-    result = _run_subprocess([*_python_command(project_root), "-m", "compileall", "-q", "src"], project_root)
+    try:
+        result = _run_subprocess(
+            [*_python_command(project_root), "-m", "compileall", "-q", "src"],
+            project_root,
+            timeout=DEFAULT_VALIDATION_TIMEOUT_SECONDS,
+        )
+    except subprocess.TimeoutExpired:
+        return {
+            "passed": False,
+            "framework": "compileall",
+            "returncode": None,
+            "stdout": "",
+            "stderr": "compile check timed out",
+            "timed_out": True,
+        }
     return {
         "passed": result.returncode == 0,
         "framework": "compileall",
@@ -86,7 +105,21 @@ def _run_test_check(project_root: Path) -> dict[str, object]:
     tests_root = project_root / "tests"
     if not tests_root.exists():
         return {"passed": True, "framework": "none", "returncode": 0, "stdout": "", "stderr": ""}
-    result = _run_subprocess([*_python_command(project_root), "-m", "pytest", "tests", "-q"], project_root)
+    try:
+        result = _run_subprocess(
+            [*_python_command(project_root), "-m", "pytest", "tests", "-q"],
+            project_root,
+            timeout=DEFAULT_VALIDATION_TIMEOUT_SECONDS,
+        )
+    except subprocess.TimeoutExpired:
+        return {
+            "passed": False,
+            "framework": "pytest",
+            "returncode": None,
+            "stdout": "",
+            "stderr": "test check timed out",
+            "timed_out": True,
+        }
     return {
         "passed": result.returncode == 0,
         "framework": "pytest",
@@ -107,13 +140,26 @@ def run_worker(project_root: Path, run_dir: Path, objective: str) -> dict[str, o
     prompt_path.write_text(prompt, encoding="utf-8")
     response_path = run_dir / "worker_response.txt"
     command = _executor_command(prompt)
-    execution = _run_command(command, project_root)
+    try:
+        execution = _run_command(command, project_root, timeout=DEFAULT_EXECUTOR_TIMEOUT_SECONDS)
+        timed_out = False
+    except subprocess.TimeoutExpired as exc:
+        execution = subprocess.CompletedProcess(
+            args=command,
+            returncode=124,
+            stdout=exc.stdout or "",
+            stderr=exc.stderr or "worker executor timed out",
+        )
+        timed_out = True
     response_path.write_text(execution.stdout, encoding="utf-8")
     compile_check = _run_compile_check(project_root)
     test_check = _run_test_check(project_root)
     changed_files = _git_changed_files(project_root)
 
-    if execution.returncode != 0:
+    if timed_out:
+        outcome = "failed"
+        summary = "Worker executor timed out."
+    elif execution.returncode != 0:
         outcome = "failed"
         summary = "Worker executor failed."
     elif not changed_files:
@@ -133,6 +179,7 @@ def run_worker(project_root: Path, run_dir: Path, objective: str) -> dict[str, o
         "summary": summary,
         "executor_command": command,
         "executor_returncode": execution.returncode,
+        "executor_timed_out": timed_out,
         "changed_files": changed_files,
         "compile_check": compile_check,
         "test_check": test_check,

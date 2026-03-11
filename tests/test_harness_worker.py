@@ -5,6 +5,7 @@ import os
 import subprocess
 from pathlib import Path
 
+import routellect.harness_worker as harness_worker
 from routellect.harness_worker import run_worker
 
 
@@ -59,3 +60,22 @@ def test_harness_worker_blocks_when_no_changes_are_made(tmp_path: Path, monkeypa
 
     assert report["worker_outcome"] == "blocked"
     assert report["changed_files"] == []
+
+
+def test_harness_worker_times_out_executor(tmp_path: Path, monkeypatch) -> None:
+    project_root = tmp_path / "repo"
+    project_root.mkdir()
+    _init_repo(project_root)
+    run_dir = tmp_path / "run"
+    run_dir.mkdir()
+
+    monkeypatch.setattr(harness_worker, "DEFAULT_EXECUTOR_TIMEOUT_SECONDS", 1)
+    monkeypatch.setenv(
+        "ROUTELLECT_HARNESS_WORKER_COMMAND",
+        "python3 - <<'PY'\nimport time\ntime.sleep(2)\nPY",
+    )
+
+    report = run_worker(project_root=project_root, run_dir=run_dir, objective="Timeout")
+
+    assert report["worker_outcome"] == "failed"
+    assert report["executor_timed_out"] is True

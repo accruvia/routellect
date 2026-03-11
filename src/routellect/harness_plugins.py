@@ -22,8 +22,10 @@ class RoutellectProjectAdapter:
 
         project_root = _resolve_repo_root()
         workspace = run_dir / "workspace"
-        workspace.mkdir(parents=True, exist_ok=True)
-        manifest_path = workspace / "routellect_workspace_manifest.json"
+        if workspace.exists() or workspace.is_symlink():
+            workspace.unlink()
+        workspace.symlink_to(project_root, target_is_directory=True)
+        manifest_path = run_dir / "routellect_workspace_manifest.json"
         docs = [path for path in (project_root / "README.md", project_root / "pyproject.toml") if path.exists()]
         manifest_path.write_text(
             json.dumps(
