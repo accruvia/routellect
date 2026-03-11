@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 import re
+from dataclasses import asdict
 from pathlib import Path
 
 
@@ -85,7 +86,7 @@ class RoutellectCognitionAdapter:
             },
             "project_summary": project_summary,
             "context_packet": context_packet,
-            "brain_sources": [source.__dict__ for source in source_documents],
+            "brain_sources": [asdict(source) for source in source_documents],
         }
 
     def build_prompt(self, project, context: dict) -> str:
