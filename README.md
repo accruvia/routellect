@@ -30,7 +30,7 @@ Those belong in a harness or downstream application.
 
 It provides:
 
-- a project adapter for preparing a Routellect workspace
+- a project adapter for preparing a disposable per-run Routellect git worktree
 - a cognition adapter for project heartbeat reviews
 
 When used with `accruvia-harness`, load it with:
@@ -42,6 +42,20 @@ export ROUTELLECT_REPO_ROOT=/path/to/routellect
 ```
 
 That plugin surface is optional. `Routellect` still works as a standalone package without the harness.
+
+### Why The Harness Uses Disposable Worktrees
+
+When Routellect is driven by a harness, each run gets its own disposable git worktree instead of writing directly into the
+main checkout.
+
+That change is intentional and important:
+
+- blocked or failed runs must not dirty the source repo
+- parallel tasks need isolated filesystem state
+- run artifacts should be inspectable without polluting the branch a developer is using
+
+The harness may discard a failed worktree later, but the main Routellect checkout should stay clean unless a successful
+result is promoted deliberately.
 
 ## Temporary Server Support
 
