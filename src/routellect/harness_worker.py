@@ -5,9 +5,13 @@ import os
 import shlex
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 DEFAULT_EXECUTOR_TIMEOUT_SECONDS = 120
+DEFAULT_EXECUTOR_IDLE_TIMEOUT_SECONDS = 30
+DEFAULT_EXECUTOR_MAX_EXTENSION_SECONDS = 120
+DEFAULT_EXECUTOR_POLL_SECONDS = 1.0
 DEFAULT_VALIDATION_TIMEOUT_SECONDS = 60
 
 
@@ -18,16 +22,13 @@ def _python_command(project_root: Path) -> list[str]:
     return [sys.executable]
 
 
-def _run_command(command: str, cwd: Path, timeout: int | None = None) -> subprocess.CompletedProcess[str]:
-    return subprocess.run(
-        command,
-        shell=True,
-        cwd=str(cwd),
-        capture_output=True,
-        text=True,
-        check=False,
-        timeout=timeout,
+def _executor_timeouts() -> tuple[float, float, float]:
+    base = float(os.environ.get("ROUTELLECT_HARNESS_EXECUTOR_TIMEOUT_SECONDS", DEFAULT_EXECUTOR_TIMEOUT_SECONDS))
+    idle = float(os.environ.get("ROUTELLECT_HARNESS_EXECUTOR_IDLE_TIMEOUT_SECONDS", DEFAULT_EXECUTOR_IDLE_TIMEOUT_SECONDS))
+    extension = float(
+        os.environ.get("ROUTELLECT_HARNESS_EXECUTOR_MAX_EXTENSION_SECONDS", DEFAULT_EXECUTOR_MAX_EXTENSION_SECONDS)
     )
+    return base, idle, extension
 
 
 def _run_subprocess(args: list[str], cwd: Path, timeout: int | None = None) -> subprocess.CompletedProcess[str]:
@@ -39,6 +40,92 @@ def _run_subprocess(args: list[str], cwd: Path, timeout: int | None = None) -> s
         check=False,
         timeout=timeout,
     )
+
+
+def _git_changed_files_for_progress(project_root: Path) -> list[str]:
+    return _git_changed_files(project_root)
+
+
+def _run_command_with_progress(command: str, cwd: Path, run_dir: Path) -> tuple[subprocess.CompletedProcess[str], bool, dict[str, object]]:
+    stdout_path = run_dir / "worker_response.txt"
+    stderr_path = run_dir / "worker.executor.stderr.txt"
+    stdout_path.write_text("", encoding="utf-8")
+    stderr_path.write_text("", encoding="utf-8")
+
+    base_timeout, idle_timeout, max_extension = _executor_timeouts()
+    hard_deadline = time.monotonic() + base_timeout + max_extension
+    soft_deadline = time.monotonic() + base_timeout
+    last_progress_at = time.monotonic()
+    last_stdout_size = 0
+    last_stderr_size = 0
+    last_changed_files: tuple[str, ...] = tuple(_git_changed_files_for_progress(cwd))
+    extension_used = 0.0
+    progress_observed = False
+
+    with stdout_path.open("w", encoding="utf-8") as stdout_handle, stderr_path.open("w", encoding="utf-8") as stderr_handle:
+        process = subprocess.Popen(
+            command,
+            shell=True,
+            cwd=str(cwd),
+            stdout=stdout_handle,
+            stderr=stderr_handle,
+            text=True,
+        )
+
+        timed_out = False
+        while True:
+            returncode = process.poll()
+            now = time.monotonic()
+            stdout_size = stdout_path.stat().st_size if stdout_path.exists() else 0
+            stderr_size = stderr_path.stat().st_size if stderr_path.exists() else 0
+            changed_files = tuple(_git_changed_files_for_progress(cwd))
+            if stdout_size != last_stdout_size or stderr_size != last_stderr_size or changed_files != last_changed_files:
+                progress_observed = True
+                last_progress_at = now
+                last_stdout_size = stdout_size
+                last_stderr_size = stderr_size
+                last_changed_files = changed_files
+
+            if returncode is not None:
+                break
+
+            if now >= hard_deadline:
+                timed_out = True
+                process.kill()
+                process.wait()
+                break
+
+            if now >= soft_deadline:
+                can_extend = extension_used < max_extension
+                recently_active = (now - last_progress_at) <= idle_timeout
+                if can_extend and recently_active:
+                    remaining = max_extension - extension_used
+                    extension_step = min(idle_timeout, remaining)
+                    extension_used += extension_step
+                    soft_deadline = now + extension_step
+                else:
+                    timed_out = True
+                    process.kill()
+                    process.wait()
+                    break
+
+            time.sleep(DEFAULT_EXECUTOR_POLL_SECONDS)
+
+    stdout = stdout_path.read_text(encoding="utf-8")
+    stderr = stderr_path.read_text(encoding="utf-8")
+    completed = subprocess.CompletedProcess(
+        args=command,
+        returncode=process.returncode if not timed_out else 124,
+        stdout=stdout,
+        stderr=stderr if not timed_out else (stderr or "worker executor timed out"),
+    )
+    return completed, timed_out, {
+        "base_timeout_seconds": base_timeout,
+        "idle_timeout_seconds": idle_timeout,
+        "max_extension_seconds": max_extension,
+        "extension_used_seconds": extension_used,
+        "progress_observed": progress_observed,
+    }
 
 
 def _git_changed_files(project_root: Path) -> list[str]:
@@ -136,20 +223,9 @@ def run_worker(project_root: Path, run_dir: Path, objective: str) -> dict[str, o
     _write_plan(run_dir, objective, project_root)
     prompt_path = run_dir / "worker_prompt.txt"
     prompt_path.write_text(prompt, encoding="utf-8")
-    response_path = run_dir / "worker_response.txt"
     command = _executor_command(prompt)
-    try:
-        execution = _run_command(command, project_root, timeout=DEFAULT_EXECUTOR_TIMEOUT_SECONDS)
-        timed_out = False
-    except subprocess.TimeoutExpired as exc:
-        execution = subprocess.CompletedProcess(
-            args=command,
-            returncode=124,
-            stdout=exc.stdout or "",
-            stderr=exc.stderr or "worker executor timed out",
-        )
-        timed_out = True
-    response_path.write_text(execution.stdout, encoding="utf-8")
+    execution, timed_out, timeout_details = _run_command_with_progress(command, project_root, run_dir)
+    response_path = run_dir / "worker_response.txt"
     compile_check = _run_compile_check(project_root)
     test_check = _run_test_check(project_root)
     changed_files = _git_changed_files(project_root)
@@ -178,6 +254,7 @@ def run_worker(project_root: Path, run_dir: Path, objective: str) -> dict[str, o
         "executor_command": command,
         "executor_returncode": execution.returncode,
         "executor_timed_out": timed_out,
+        "executor_timeout_details": timeout_details,
         "changed_files": changed_files,
         "compile_check": compile_check,
         "test_check": test_check,

@@ -70,6 +70,9 @@ def test_harness_worker_times_out_executor(tmp_path: Path, monkeypatch) -> None:
     run_dir.mkdir()
 
     monkeypatch.setattr(harness_worker, "DEFAULT_EXECUTOR_TIMEOUT_SECONDS", 1)
+    monkeypatch.setattr(harness_worker, "DEFAULT_EXECUTOR_IDLE_TIMEOUT_SECONDS", 0.25)
+    monkeypatch.setattr(harness_worker, "DEFAULT_EXECUTOR_MAX_EXTENSION_SECONDS", 0.0)
+    monkeypatch.setattr(harness_worker, "DEFAULT_EXECUTOR_POLL_SECONDS", 0.05)
     monkeypatch.setenv(
         "ROUTELLECT_HARNESS_WORKER_COMMAND",
         "python3 - <<'PY'\nimport time\ntime.sleep(2)\nPY",
@@ -79,3 +82,35 @@ def test_harness_worker_times_out_executor(tmp_path: Path, monkeypatch) -> None:
 
     assert report["worker_outcome"] == "failed"
     assert report["executor_timed_out"] is True
+
+
+def test_harness_worker_extends_timeout_when_progress_is_observed(tmp_path: Path, monkeypatch) -> None:
+    project_root = tmp_path / "repo"
+    project_root.mkdir()
+    _init_repo(project_root)
+    run_dir = tmp_path / "run"
+    run_dir.mkdir()
+
+    monkeypatch.setattr(harness_worker, "DEFAULT_EXECUTOR_TIMEOUT_SECONDS", 0.3)
+    monkeypatch.setattr(harness_worker, "DEFAULT_EXECUTOR_IDLE_TIMEOUT_SECONDS", 0.5)
+    monkeypatch.setattr(harness_worker, "DEFAULT_EXECUTOR_MAX_EXTENSION_SECONDS", 1.0)
+    monkeypatch.setattr(harness_worker, "DEFAULT_EXECUTOR_POLL_SECONDS", 0.05)
+    monkeypatch.setenv(
+        "ROUTELLECT_HARNESS_WORKER_COMMAND",
+        "python3 - <<'PY'\n"
+        "import sys, time\n"
+        "from pathlib import Path\n"
+        "print('working', flush=True)\n"
+        "time.sleep(0.4)\n"
+        "path = Path('src/demo.py')\n"
+        "path.write_text(path.read_text(encoding='utf-8') + '\\n# progress\\n', encoding='utf-8')\n"
+        "print('done', flush=True)\n"
+        "PY",
+    )
+
+    report = run_worker(project_root=project_root, run_dir=run_dir, objective="Use progress-aware extension")
+
+    assert report["worker_outcome"] == "success"
+    assert report["executor_timed_out"] is False
+    assert report["executor_timeout_details"]["progress_observed"] is True
+    assert report["executor_timeout_details"]["extension_used_seconds"] > 0
