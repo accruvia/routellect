@@ -14,6 +14,13 @@ DEFAULT_EXECUTOR_IDLE_TIMEOUT_SECONDS = 30
 DEFAULT_EXECUTOR_MAX_EXTENSION_SECONDS = 120
 DEFAULT_EXECUTOR_POLL_SECONDS = 1.0
 DEFAULT_VALIDATION_TIMEOUT_SECONDS = 60
+_VALIDATION_ENV_BLOCKLIST = {
+    "ACCRUVIA_TASK_SCOPE_JSON",
+    "ROUTELLECT_HARNESS_WORKER_COMMAND",
+    "ROUTELLECT_HARNESS_EXECUTOR_TIMEOUT_SECONDS",
+    "ROUTELLECT_HARNESS_EXECUTOR_IDLE_TIMEOUT_SECONDS",
+    "ROUTELLECT_HARNESS_EXECUTOR_MAX_EXTENSION_SECONDS",
+}
 
 
 def _python_command(project_root: Path) -> list[str]:
@@ -33,6 +40,9 @@ def _executor_timeouts() -> tuple[float, float, float]:
 
 
 def _run_subprocess(args: list[str], cwd: Path, timeout: int | None = None) -> subprocess.CompletedProcess[str]:
+    env = os.environ.copy()
+    for key in _VALIDATION_ENV_BLOCKLIST:
+        env.pop(key, None)
     return subprocess.run(
         args,
         cwd=str(cwd),
@@ -40,6 +50,7 @@ def _run_subprocess(args: list[str], cwd: Path, timeout: int | None = None) -> s
         text=True,
         check=False,
         timeout=timeout,
+        env=env,
     )
 
 
