@@ -5,6 +5,7 @@ from routellect.protocols import (
     FederatedEngineProtocol,
     Recommendation,
     RecommendationSource,
+    RoutellectServiceProtocol,
     TelemetryProtocol,
     TrustRegistryProtocol,
 )
@@ -14,6 +15,7 @@ __all__ = [
     "FederatedEngineProtocol",
     "Recommendation",
     "RecommendationSource",
+    "RoutellectServiceProtocol",
     "TelemetryProtocol",
     "TrustRegistryProtocol",
 ]

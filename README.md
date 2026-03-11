@@ -45,9 +45,9 @@ That plugin surface is optional. `Routellect` still works as a standalone packag
 
 ## Temporary Server Support
 
-This repo includes a lightweight server client surface to keep developer velocity high while the surrounding system is being split apart.
+This repo includes a lightweight hosted-service client surface to keep developer velocity high while the surrounding system is being split apart.
 
-That client/server shape is a band-aid, not the long-term center of the product. The durable product value is the routing/runtime behavior and the telemetry/data generated from real usage.
+That client/server shape is a band-aid, not the long-term center of the product. The durable product value is the routing/runtime behavior and the telemetry/data generated from real usage. The default scaffold client targets `http://localhost:8000`; downstream deployments should configure their own hosted endpoint explicitly.
 
 ## Development
 

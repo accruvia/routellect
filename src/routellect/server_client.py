@@ -1,8 +1,8 @@
-"""HTTP client for Accruvia Server.
+"""Optional HTTP client for a hosted Routellect routing service.
 
-Implements AccruviaServiceProtocol using httpx to connect
-to the proprietary server. Falls back gracefully when server
-is unavailable.
+This client is scaffolding to accelerate local and downstream integrations.
+It is not the durable center of the OSS package and should be treated as an
+optional hosted-service adapter.
 """
 
 import logging
@@ -19,8 +19,8 @@ from routellect.protocols import (
 
 logger = logging.getLogger(__name__)
 
-# Default server URL
-DEFAULT_SERVER_URL = "https://api.accruvia.io"
+# Default scaffold server URL
+DEFAULT_SERVER_URL = "http://localhost:8000"
 
 # Development server URL
 DEV_SERVER_URL = "http://localhost:8000"
@@ -34,7 +34,7 @@ DEFAULT_RETRIES = 3
 
 @dataclass
 class ServerClientConfig:
-    """Configuration for AccruviaServerClient."""
+    """Configuration for the optional hosted routing client."""
 
     server_url: str = DEFAULT_SERVER_URL
     timeout: float = DEFAULT_TIMEOUT
@@ -54,11 +54,13 @@ class RouteResult:
 
     def to_recommendation(self) -> Recommendation:
         """Convert to Recommendation."""
-        source = RecommendationSource.ACCRUVIA
+        source = RecommendationSource.ROUTELLECT
         if self.source == "local":
             source = RecommendationSource.LOCAL
         elif self.source == "blended":
             source = RecommendationSource.BLENDED
+        elif self.source in {"accruvia", "routellect"}:
+            source = RecommendationSource.ROUTELLECT
 
         return Recommendation(
             model_id=self.recommended_model,
@@ -78,12 +80,11 @@ class SettleResult:
     message: str
 
 
-class AccruviaServerClient:
-    """HTTP client implementing AccruviaServiceProtocol.
+class HostedRouterClient:
+    """HTTP client implementing the hosted routing service protocol.
 
-    Connects to the Accruvia server for model recommendations
-    and outcome reporting. Falls back gracefully when server
-    is unavailable.
+    Connects to an optional hosted service for model recommendations and
+    outcome reporting. Falls back gracefully when the service is unavailable.
     """
 
     def __init__(self, config: ServerClientConfig | None = None) -> None:
@@ -96,7 +97,7 @@ class AccruviaServerClient:
         """Get request headers."""
         headers = {
             "Content-Type": "application/json",
-            "User-Agent": "accruvia-client/0.1.0",
+            "User-Agent": "routellect/0.1.0",
         }
         if self.config.api_key:
             headers["Authorization"] = f"Bearer {self.config.api_key}"
@@ -133,7 +134,7 @@ class AccruviaServerClient:
             self._sync_client.close()
             self._sync_client = None
 
-    # AccruviaServiceProtocol implementation
+    # RoutellectServiceProtocol implementation
     def get_recommendation(
         self,
         task_fingerprint: dict,
@@ -141,7 +142,7 @@ class AccruviaServerClient:
     ) -> Recommendation:
         """Get a model recommendation from the server.
 
-        Synchronous version for compatibility with AccruviaServiceProtocol.
+        Synchronous version for compatibility with RoutellectServiceProtocol.
         """
         from routellect.identity import get_or_create_client_uuid
 
@@ -170,8 +171,8 @@ class AccruviaServerClient:
             return Recommendation(
                 model_id=data["recommended_model"],
                 confidence=data["confidence"],
-                source=RecommendationSource.ACCRUVIA,
-                reasoning="Server recommendation",
+                source=RecommendationSource.ROUTELLECT,
+                reasoning="Hosted routing recommendation",
             )
 
         except httpx.HTTPError as e:
@@ -182,13 +183,13 @@ class AccruviaServerClient:
                     model_id=local_recommendation.model_id,
                     confidence=local_recommendation.confidence * 0.8,
                     source=RecommendationSource.LOCAL,
-                    reasoning="Server unavailable, using local recommendation",
-                )
+                reasoning="Hosted routing unavailable, using local recommendation",
+            )
             return Recommendation(
                 model_id="claude-opus-4-5-20251101",
                 confidence=0.5,
                 source=RecommendationSource.LOCAL,
-                reasoning="Server unavailable, using default",
+                reasoning="Hosted routing unavailable, using default",
             )
 
     def report_outcome(
@@ -201,7 +202,7 @@ class AccruviaServerClient:
     ) -> None:
         """Report task outcome to the server.
 
-        Synchronous version for compatibility with AccruviaServiceProtocol.
+        Synchronous version for compatibility with RoutellectServiceProtocol.
         """
         # Find the task_id for this fingerprint
         task_id = None
@@ -356,25 +357,34 @@ def create_client(
     server_url: str = DEFAULT_SERVER_URL,
     api_key: str | None = None,
     timeout: float = DEFAULT_TIMEOUT,
-) -> AccruviaServerClient:
-    """Create an Accruvia server client.
+) -> HostedRouterClient:
+    """Create an optional hosted routing client.
 
     Args:
-        server_url: Server URL (defaults to production).
+        server_url: Hosted service URL.
         api_key: Optional API key for authentication.
         timeout: Request timeout in seconds.
 
     Returns:
-        Configured AccruviaServerClient.
+        Configured HostedRouterClient.
     """
     config = ServerClientConfig(
         server_url=server_url,
         api_key=api_key,
         timeout=timeout,
     )
-    return AccruviaServerClient(config)
+    return HostedRouterClient(config)
 
 
-def create_dev_client() -> AccruviaServerClient:
-    """Create a client for local development server."""
+def create_scaffold_client() -> HostedRouterClient:
+    """Create a client for the local scaffold server."""
     return create_client(server_url=DEV_SERVER_URL, timeout=10.0)
+
+
+# Backward-compatible aliases for the extracted codebase.
+AccruviaServerClient = HostedRouterClient
+
+
+def create_dev_client() -> HostedRouterClient:
+    """Backward-compatible alias for the old helper name."""
+    return create_scaffold_client()

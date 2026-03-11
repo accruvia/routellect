@@ -4,7 +4,7 @@ This module implements the deferred identity model:
 - Phase 1-2: Random client UUID (no PII, no GDPR)
 - Phase 3+: Optional link UUID to account for credit claiming
 
-UUID is generated on first install and stored in ~/.accruvia/client_id.
+UUID is generated on first install and stored in ~/.routellect/client_id.
 Telemetry includes proof-of-execution for Sybil resistance.
 """
 
@@ -77,22 +77,37 @@ class TelemetryPayload:
         }
 
 
+def get_routellect_dir() -> Path:
+    """Get the Routellect config directory (~/.routellect)."""
+    routellect_dir = Path.home() / ".routellect"
+    routellect_dir.mkdir(parents=True, exist_ok=True)
+    return routellect_dir
+
+
+def get_legacy_accruvia_dir() -> Path:
+    """Get the legacy Accruvia config directory (~/.accruvia)."""
+    return Path.home() / ".accruvia"
+
+
 def get_accruvia_dir() -> Path:
-    """Get the Accruvia config directory (~/.accruvia)."""
-    accruvia_dir = Path.home() / ".accruvia"
-    accruvia_dir.mkdir(parents=True, exist_ok=True)
-    return accruvia_dir
+    """Backward-compatible alias for the legacy helper name."""
+    return get_routellect_dir()
 
 
 def get_client_id_path() -> Path:
     """Get path to client ID file."""
-    return get_accruvia_dir() / "client_id"
+    return get_routellect_dir() / "client_id"
+
+
+def get_legacy_client_id_path() -> Path:
+    """Get path to the legacy client ID file."""
+    return get_legacy_accruvia_dir() / "client_id"
 
 
 def get_or_create_client_uuid() -> str:
     """Generate or load the client UUID.
 
-    UUID is stored in ~/.accruvia/client_id and persists across sessions.
+    UUID is stored in ~/.routellect/client_id and persists across sessions.
     This is NOT personal data - it's a random identifier that cannot
     be traced back to any individual without additional linkage.
 
@@ -100,6 +115,7 @@ def get_or_create_client_uuid() -> str:
         The client UUID as a string.
     """
     client_id_path = get_client_id_path()
+    legacy_client_id_path = get_legacy_client_id_path()
 
     if client_id_path.exists():
         try:
@@ -109,6 +125,18 @@ def get_or_create_client_uuid() -> str:
             return stored_uuid
         except (ValueError, OSError):
             # Invalid or corrupted, regenerate
+            pass
+
+    if legacy_client_id_path.exists():
+        try:
+            stored_uuid = legacy_client_id_path.read_text().strip()
+            uuid.UUID(stored_uuid)
+            try:
+                client_id_path.write_text(stored_uuid)
+            except OSError:
+                pass
+            return stored_uuid
+        except (ValueError, OSError):
             pass
 
     # Generate new UUID
@@ -208,7 +236,7 @@ class CreditClaimManager:
     """
 
     def __init__(self) -> None:
-        self.claim_file = get_accruvia_dir() / "claimed_account"
+        self.claim_file = get_routellect_dir() / "claimed_account"
 
     def is_claimed(self) -> bool:
         """Check if credits have been claimed to an account."""

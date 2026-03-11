@@ -1,10 +1,8 @@
-"""Service protocols (interfaces) for Accruvia.
+"""Public routing and telemetry protocols for Routellect.
 
-This module defines the contracts that the proprietary server implements.
-These are the PUBLIC interfaces - they go in the open source client.
-
-The server (accruvia_server) DEPENDS ON these protocols and implements them.
-Clients code against these protocols, not concrete implementations.
+These contracts are intended to be stable public interfaces for the OSS module.
+Hosted services or downstream applications may implement them, but the core
+package should not depend on any proprietary deployment shape.
 """
 
 from abc import ABC, abstractmethod
@@ -17,7 +15,8 @@ class RecommendationSource(Enum):
     """Where a recommendation originated."""
 
     LOCAL = "local"  # From local telemetry only
-    ACCRUVIA = "accruvia"  # From Accruvia service
+    ROUTELLECT = "routellect"  # From a hosted Routellect service
+    ACCRUVIA = "routellect"  # Backward-compatible alias
     BLENDED = "blended"  # Weighted combination
 
 
@@ -32,16 +31,16 @@ class Recommendation:
 
 
 @runtime_checkable
-class AccruviaServiceProtocol(Protocol):
-    """Protocol for Accruvia recommendation service.
+class RoutellectServiceProtocol(Protocol):
+    """Protocol for a hosted routing recommendation service.
 
-    This is the contract that the server implements.
-    Clients can use this protocol for type hints without
-    depending on the server implementation.
+    This is the public contract that optional hosted backends can implement.
+    Clients can use this protocol for type hints without depending on any
+    specific deployment or private server implementation.
 
     Usage:
         # In client code
-        def get_model(service: AccruviaServiceProtocol, task: dict) -> str:
+        def get_model(service: RoutellectServiceProtocol, task: dict) -> str:
             rec = service.get_recommendation(task)
             return rec.model_id
     """
@@ -170,7 +169,7 @@ class FederatedEngineProtocol(ABC):
 
         Args:
             local: Recommendation from local telemetry
-            remote: Recommendation from Accruvia service
+            remote: Recommendation from a hosted Routellect service
             population_type: Type of population (for per-population weights)
 
         Returns:
@@ -194,22 +193,31 @@ class FederatedEngineProtocol(ABC):
         """
         pass
 
-    @abstractmethod
-    def get_accruvia_weight(self, population_type: str) -> float:
-        """Get current weight for Accruvia recommendations.
+    def get_routellect_weight(self, population_type: str) -> float:
+        """Get current weight for hosted Routellect recommendations.
 
         Returns:
             Weight between 0.0 and 1.0
         """
+        return self.get_accruvia_weight(population_type)
+
+    @abstractmethod
+    def get_accruvia_weight(self, population_type: str) -> float:
+        """Backward-compatible alias for old extracted implementations."""
         pass
+
+
+# Backward-compatible alias for extracted code that still uses the old name.
+AccruviaServiceProtocol = RoutellectServiceProtocol
 
 
 # Re-export for convenience
 __all__ = [
-    "AccruviaServiceProtocol",
     "FederatedEngineProtocol",
     "Recommendation",
     "RecommendationSource",
+    "RoutellectServiceProtocol",
     "TelemetryProtocol",
     "TrustRegistryProtocol",
+    "AccruviaServiceProtocol",
 ]
