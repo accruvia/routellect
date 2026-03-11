@@ -136,6 +136,28 @@ def test_harness_worker_blocks_when_changes_escape_scope(tmp_path: Path, monkeyp
     assert report["scope_violation"]["forbidden_path_hits"] == ["README.md"]
 
 
+def test_harness_worker_ignores_preexisting_dirty_files_for_scope(tmp_path: Path, monkeypatch) -> None:
+    project_root = tmp_path / "repo"
+    project_root.mkdir()
+    _init_repo(project_root)
+    run_dir = tmp_path / "run"
+    run_dir.mkdir()
+    (project_root / "README.md").write_text("dirty\n", encoding="utf-8")
+
+    monkeypatch.setenv("ROUTELLECT_HARNESS_WORKER_COMMAND", "printf '\\n# scoped change\\n' >> src/demo.py")
+    monkeypatch.setenv(
+        "ACCRUVIA_TASK_SCOPE_JSON",
+        json.dumps({"allowed_paths": ["src/demo.py"], "forbidden_paths": ["README.md"]}),
+    )
+
+    report = run_worker(project_root=project_root, run_dir=run_dir, objective="Stay in scope with preexisting dirt")
+
+    assert report["worker_outcome"] == "success"
+    assert "README.md" in report["changed_files"]
+    assert report["new_changed_files"] == ["src/demo.py"]
+    assert report["scope_violation"] is None
+
+
 def test_harness_worker_kills_process_group_on_timeout(monkeypatch, tmp_path: Path) -> None:
     class FakeProc:
         def __init__(self) -> None:

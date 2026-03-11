@@ -281,14 +281,16 @@ def run_worker(project_root: Path, run_dir: Path, objective: str) -> dict[str, o
     _write_plan(run_dir, objective, project_root)
     prompt_path = run_dir / "worker_prompt.txt"
     prompt_path.write_text(prompt, encoding="utf-8")
+    initial_changed_files = _git_changed_files(project_root)
     command = _executor_command(prompt)
     execution, timed_out, timeout_details = _run_command_with_progress(command, project_root, run_dir)
     response_path = run_dir / "worker_response.txt"
     compile_check = _run_compile_check(project_root)
     test_check = _run_test_check(project_root)
     changed_files = _git_changed_files(project_root)
+    new_changed_files = [path for path in changed_files if path not in initial_changed_files]
     scope = _load_scope()
-    scope_violation = _scope_violation(changed_files, scope)
+    scope_violation = _scope_violation(new_changed_files, scope)
 
     if timed_out:
         outcome = "failed"
@@ -299,7 +301,7 @@ def run_worker(project_root: Path, run_dir: Path, objective: str) -> dict[str, o
     elif scope_violation is not None:
         outcome = "blocked"
         summary = "Worker changed files outside the task scope."
-    elif not changed_files:
+    elif not new_changed_files:
         outcome = "blocked"
         summary = "Worker made no repository changes."
     elif not compile_check["passed"] or not test_check["passed"]:
@@ -320,7 +322,9 @@ def run_worker(project_root: Path, run_dir: Path, objective: str) -> dict[str, o
         "executor_timeout_details": timeout_details,
         "task_scope": scope,
         "scope_violation": scope_violation,
+        "initial_changed_files": initial_changed_files,
         "changed_files": changed_files,
+        "new_changed_files": new_changed_files,
         "compile_check": compile_check,
         "test_check": test_check,
         "response_path": str(response_path),
