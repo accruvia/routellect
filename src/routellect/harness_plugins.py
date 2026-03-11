@@ -51,6 +51,15 @@ class RoutellectProjectAdapter:
             diagnostics={"project_adapter": self.name, "routellect_repo_root": str(project_root)},
         )
 
+    def build_worker(self, project, task, run, workspace, default_worker):
+        from accruvia_harness.workers import ShellCommandWorker
+
+        command = os.environ.get(
+            "ROUTELLECT_HARNESS_WORKER_ENTRYPOINT",
+            "./.venv/bin/python -m routellect.harness_worker",
+        )
+        return ShellCommandWorker(command)
+
 
 class RoutellectCognitionAdapter:
     name = "routellect"
