@@ -60,7 +60,10 @@ class RoutellectProjectAdapter:
             "ROUTELLECT_HARNESS_WORKER_ENTRYPOINT",
             "./.venv/bin/python -m routellect.harness_worker",
         )
-        return ShellCommandWorker(command)
+        return ShellCommandWorker(
+            command,
+            env_passthrough=("ROUTELLECT_HARNESS_WORKER_COMMAND",),
+        )
 
 
 class RoutellectCognitionAdapter:

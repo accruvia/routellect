@@ -59,9 +59,7 @@ def _executor_command(prompt: str) -> str:
     if override:
         return override
     quoted_prompt = shlex.quote(prompt)
-    return (
-        f"codex exec --dangerously-bypass-approvals-and-sandbox {quoted_prompt}"
-    )
+    return f"codex exec --dangerously-bypass-approvals-and-sandbox {quoted_prompt}"
 
 
 def _write_plan(run_dir: Path, objective: str, project_root: Path) -> Path:
