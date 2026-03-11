@@ -111,10 +111,12 @@ class RoutellectCognitionAdapter:
             [
                 "You are the project brain for Routellect.",
                 "Analyze the objectives, repo documents, open task state, and recent work.",
+                "Issues must be atomic. If a task is too broad, split it into smaller executable child tasks instead of retrying the broad task.",
                 "Decide whether new issues/tasks should exist and what the highest-priority next work is.",
                 "Return strict JSON with keys:",
                 "summary, priority_focus, issue_creation_needed, proposed_tasks, risks.",
                 "Each proposed_tasks item must contain title, objective, priority, rationale.",
+                "If splitting an existing task, include split_of_task_id plus allowed_paths/forbidden_paths whenever you can bound the work safely.",
                 json.dumps(context, indent=2, sort_keys=True),
             ]
         )
