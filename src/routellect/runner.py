@@ -2416,15 +2416,15 @@ ISSUES = {
 }
 
 
-def load_issue_from_gitlab(issue_id: str, base_dir: Path) -> IssueSpec | None:
-    """Fetch issue details from GitLab when the local registry is stale.
+def load_issue_from_github(issue_id: str, base_dir: Path) -> IssueSpec | None:
+    """Fetch issue details from GitHub when the local registry is stale.
 
     This keeps the runner usable for newly created backlog items without
     requiring a code edit every time the issue list changes.
     """
     try:
         result = subprocess.run(
-            ["glab", "issue", "view", issue_id, "-F", "json"],
+            ["gh", "issue", "view", issue_id, "--json", "number,title,body,labels"],
             cwd=str(base_dir),
             capture_output=True,
             text=True,
@@ -2443,7 +2443,7 @@ def load_issue_from_gitlab(issue_id: str, base_dir: Path) -> IssueSpec | None:
         return None
 
     title = payload.get("title")
-    description = payload.get("description") or ""
+    description = payload.get("body") or ""
     if not title:
         return None
 
@@ -2458,7 +2458,7 @@ def load_issue_from_gitlab(issue_id: str, base_dir: Path) -> IssueSpec | None:
             labels.append(label)
 
     return IssueSpec(
-        issue_id=str(payload.get("iid") or issue_id),
+        issue_id=str(payload.get("number") or issue_id),
         title=title,
         description=description,
         labels=labels or None,
@@ -2492,11 +2492,11 @@ def main():
 
     issue = ISSUES.get(args.issue)
     if not issue:
-        issue = load_issue_from_gitlab(args.issue, base_dir)
+        issue = load_issue_from_github(args.issue, base_dir)
     if not issue:
         print(
             f"Unknown issue: {args.issue}. Available locally: {', '.join(ISSUES.keys())}. "
-            "GitLab lookup also failed."
+            "GitHub lookup also failed."
         )
         sys.exit(1)
 

@@ -1014,6 +1014,40 @@ class TestIssueRegistry:
         assert ISSUES["456"].issue_id == "456"
         assert "QA review panel" in ISSUES["456"].title
 
+    def test_load_issue_from_github_parses_gh_issue_view_json(self):
+        from routellect.runner import load_issue_from_github
+
+        completed = subprocess.CompletedProcess(
+            args=["gh", "issue", "view", "456"],
+            returncode=0,
+            stdout=json.dumps(
+                {
+                    "number": 456,
+                    "title": "QA review panel",
+                    "body": "Review accepted artifacts before verify.",
+                    "labels": [{"name": "runner"}, {"name": "qa"}],
+                }
+            ),
+            stderr="",
+        )
+
+        with patch("routellect.runner.subprocess.run", return_value=completed) as run_mock:
+            issue = load_issue_from_github("456", Path("/tmp/repo"))
+
+        assert issue is not None
+        assert issue.issue_id == "456"
+        assert issue.title == "QA review panel"
+        assert issue.description == "Review accepted artifacts before verify."
+        assert issue.labels == ["runner", "qa"]
+        run_mock.assert_called_once_with(
+            ["gh", "issue", "view", "456", "--json", "number,title,body,labels"],
+            cwd="/tmp/repo",
+            capture_output=True,
+            text=True,
+            timeout=20,
+            check=False,
+        )
+
 
 class TestQAPanel:
     def test_build_prompt_contains_all_reviewers_and_artifacts(self):

@@ -42,6 +42,16 @@ from routellect.server_client import (
 
 def test_public_package_exports_only_stable_contract_symbols():
     assert routellect.__all__ == [
+        # Canonical routing interface
+        "ModelCapability",
+        "ModelSelectorProtocol",
+        "RoutingDecision",
+        "RoutingOutcome",
+        # Routing event schema
+        "ModelUniverseSnapshot",
+        "RoutingDecisionEvent",
+        "RoutingOutcomeEvent",
+        # Legacy types (still in use)
         "AccruviaServiceProtocol",
         "FederatedEngineProtocol",
         "Recommendation",

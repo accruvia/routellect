@@ -135,7 +135,7 @@ class RoutellectCognitionAdapter:
             },
             "objective": {
                 "repo_name": "Routellect",
-                "product_shape": "Open source LLM router and issue-runner module",
+                "product_shape": "Open-source LLM model selector: task features in, model decision out",
                 "hosted_service_note": "Any server in the repo is scaffolding for velocity, not the durable product center.",
                 "data_product_note": "Hashed routing requests and execution telemetry are strategically important downstream data assets.",
             },

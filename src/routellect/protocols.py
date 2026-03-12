@@ -3,12 +3,104 @@
 These contracts are intended to be stable public interfaces for the OSS module.
 Hosted services or downstream applications may implement them, but the core
 package should not depend on any proprietary deployment shape.
+
+Canonical interface:
+    set_model_universe(models)  — tell routellect what models exist
+    select_model(fingerprint, constraints) — get a routing decision
+    record_outcome(decision, metrics) — report what happened
 """
 
 from abc import ABC, abstractmethod, update_abstractmethods
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import Enum
-from typing import Protocol, runtime_checkable
+from typing import Any, Protocol, runtime_checkable
+
+
+# ---------------------------------------------------------------------------
+# Core routing types
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class ModelCapability:
+    """A single model available in the current universe.
+
+    Populated by the harness via model discovery probes, then handed to
+    routellect via ``set_model_universe``.
+    """
+
+    backend: str  # e.g. "codex", "claude", "accruvia_client"
+    provider: str  # e.g. "anthropic", "openai"
+    model_id: str  # e.g. "claude-sonnet-4-6"
+    supports_streaming: bool = False
+    supports_tools: bool = False
+    max_context_tokens: int | None = None
+    available: bool = True
+    probe_error: str | None = None
+
+
+@dataclass
+class RoutingDecision:
+    """The result of ``select_model``.
+
+    Includes enough context to reproduce and audit the decision later.
+    """
+
+    model_id: str
+    backend: str
+    confidence: float
+    reasoning: str = ""
+    universe_hash: str = ""
+    is_exploration: bool = False
+
+
+@dataclass
+class RoutingOutcome:
+    """Metrics recorded after a routed invocation completes."""
+
+    success: bool
+    latency_ms: int = 0
+    input_tokens: int = 0
+    output_tokens: int = 0
+    cost: float = 0.0
+    failure_kind: str | None = None
+    retry_count: int = 0
+    qa_result: str | None = None
+    extra: dict[str, Any] = field(default_factory=dict)
+
+
+@runtime_checkable
+class ModelSelectorProtocol(Protocol):
+    """Canonical routellect interface.
+
+    Harness calls ``set_model_universe`` at startup, ``select_model`` before
+    each invocation, and ``record_outcome`` after each invocation.
+    """
+
+    def set_model_universe(self, models: list[ModelCapability]) -> None:
+        """Replace the live model universe for this session."""
+        ...
+
+    def select_model(
+        self,
+        task_fingerprint: dict,
+        constraints: dict | None = None,
+    ) -> RoutingDecision:
+        """Pick a model for the given task."""
+        ...
+
+    def record_outcome(
+        self,
+        decision: RoutingDecision,
+        outcome: RoutingOutcome,
+    ) -> None:
+        """Report execution outcome so the selector can learn."""
+        ...
+
+
+# ---------------------------------------------------------------------------
+# Legacy types — still used by existing code, will converge over time
+# ---------------------------------------------------------------------------
 
 
 class RecommendationSource(Enum):
