@@ -20,7 +20,15 @@ Your app  →  routellect proxy (:11411/v1)  →  real LLM provider
 ### 1. Install
 
 ```bash
+# From PyPI (when published):
 pip install routellect[proxy]
+
+# From source:
+git clone https://github.com/soverton/routellect.git
+cd routellect
+python3 -m venv .venv
+. .venv/bin/activate
+pip install -e '.[proxy]'
 ```
 
 ### 2. Run
