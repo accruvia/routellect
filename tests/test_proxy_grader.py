@@ -25,7 +25,7 @@ class TestGradesDB:
         ensure_session("sess-1", db_path=db)
         grades = [
             GradeRecord("sess-1", 0, "gpt-4o", "openai", "pass", 0.9, "user continued"),
-            GradeRecord("sess-1", 1, "claude-sonnet-4-6", "anthropic", "fail", 0.8, "user corrected"),
+            GradeRecord("sess-1", 1, "claude-sonnet-4-20250514", "anthropic", "fail", 0.8, "user corrected"),
         ]
         save_grades(grades, "sess-1", batch_size=10, grading_cost_usd=0.005,
                      grader_model="haiku", avg_confidence=0.85, db_path=db)
@@ -38,7 +38,7 @@ class TestGradesDB:
         assert len(stats) == 2
         models = {s["model_used"] for s in stats}
         assert "gpt-4o" in models
-        assert "claude-sonnet-4-6" in models
+        assert "claude-sonnet-4-20250514" in models
 
     def test_routing_log(self, tmp_path: Path):
         from routellect.proxy._grades_db import RoutingRecord, log_routing, ensure_session
@@ -173,8 +173,8 @@ class TestGrader:
             ),
             _Exchange(
                 message_index=1, user_message="no that's wrong", assistant_response="sorry",
-                model_used="claude-sonnet-4-6", provider="anthropic",
-                decision=RoutingDecision(model_id="claude-sonnet-4-6", backend="anthropic", confidence=0.7),
+                model_used="claude-sonnet-4-20250514", provider="anthropic",
+                decision=RoutingDecision(model_id="claude-sonnet-4-20250514", backend="anthropic", confidence=0.7),
                 latency_ms=200, input_tokens=20, output_tokens=10,
             ),
         ]
@@ -189,7 +189,7 @@ class TestGrader:
         assert records[0].grade == "pass"
         assert records[0].model_used == "gpt-4o"
         assert records[1].grade == "fail"
-        assert records[1].model_used == "claude-sonnet-4-6"
+        assert records[1].model_used == "claude-sonnet-4-20250514"
 
     def test_parse_grades_handles_markdown_fences(self):
         grader = self._make_grader()

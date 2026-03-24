@@ -13,8 +13,8 @@ from routellect.proxy._selector import (
 def _make_models() -> list[ModelCapability]:
     """Build a small test universe with 3 tiers."""
     return [
-        ModelCapability(backend="anthropic", provider="anthropic", model_id="claude-opus-4-6", available=True),
-        ModelCapability(backend="anthropic", provider="anthropic", model_id="claude-sonnet-4-6", available=True),
+        ModelCapability(backend="anthropic", provider="anthropic", model_id="claude-opus-4-20250514", available=True),
+        ModelCapability(backend="anthropic", provider="anthropic", model_id="claude-sonnet-4-20250514", available=True),
         ModelCapability(backend="anthropic", provider="anthropic", model_id="claude-haiku-4-5-20251001", available=True),
         ModelCapability(backend="openai", provider="openai", model_id="gpt-4o-mini", available=True),
     ]
@@ -31,7 +31,7 @@ class TestGraduatedDemotionSelector:
         sel.set_model_universe(_make_models())
 
         # All initial selections should be tier 1 (opus/sonnet 4.6)
-        tier_1_models = {"claude-opus-4-6", "claude-sonnet-4-6"}
+        tier_1_models = {"claude-opus-4-20250514", "claude-sonnet-4-20250514"}
         for _ in range(20):
             decision = sel.select_model({"message_count": 1})
             assert decision.model_id in tier_1_models
@@ -41,7 +41,7 @@ class TestGraduatedDemotionSelector:
         sel.set_model_universe(_make_models())
 
         # Record 5 passes — not enough to start trialing
-        decision = RoutingDecision(model_id="claude-sonnet-4-6", backend="anthropic", confidence=0.8)
+        decision = RoutingDecision(model_id="claude-sonnet-4-20250514", backend="anthropic", confidence=0.8)
         for _ in range(5):
             sel.record_outcome(decision, RoutingOutcome(success=True, qa_result="pass"))
 
@@ -49,14 +49,14 @@ class TestGraduatedDemotionSelector:
         # Still selects from tier 1
         for _ in range(20):
             d = sel.select_model({"message_count": 1})
-            assert d.model_id in {"claude-opus-4-6", "claude-sonnet-4-6"}
+            assert d.model_id in {"claude-opus-4-20250514", "claude-sonnet-4-20250514"}
 
     def test_starts_trial_after_enough_grades(self):
         sel = GraduatedDemotionSelector()
         sel.set_model_universe(_make_models())
 
         # Record MIN_GRADES_BEFORE_DEMOTION passes at tier 1
-        decision = RoutingDecision(model_id="claude-sonnet-4-6", backend="anthropic", confidence=0.8)
+        decision = RoutingDecision(model_id="claude-sonnet-4-20250514", backend="anthropic", confidence=0.8)
         for _ in range(MIN_GRADES_BEFORE_DEMOTION):
             sel.record_outcome(decision, RoutingOutcome(success=True, qa_result="pass"))
 
@@ -74,7 +74,7 @@ class TestGraduatedDemotionSelector:
         sel.set_model_universe(_make_models())
 
         # Fill tier 1 with passes
-        d1 = RoutingDecision(model_id="claude-sonnet-4-6", backend="anthropic", confidence=0.8)
+        d1 = RoutingDecision(model_id="claude-sonnet-4-20250514", backend="anthropic", confidence=0.8)
         for _ in range(MIN_GRADES_BEFORE_DEMOTION):
             sel.record_outcome(d1, RoutingOutcome(success=True, qa_result="pass"))
 
@@ -103,7 +103,7 @@ class TestGraduatedDemotionSelector:
         sel.set_model_universe(_make_models())
 
         # Fill tier 1
-        d1 = RoutingDecision(model_id="claude-sonnet-4-6", backend="anthropic", confidence=0.8)
+        d1 = RoutingDecision(model_id="claude-sonnet-4-20250514", backend="anthropic", confidence=0.8)
         for _ in range(MIN_GRADES_BEFORE_DEMOTION):
             sel.record_outcome(d1, RoutingOutcome(success=True, qa_result="pass"))
 
@@ -129,7 +129,7 @@ class TestGraduatedDemotionSelector:
         sel.set_model_universe(_make_models())
         sel.locked = True
 
-        tier_1_models = {"claude-opus-4-6", "claude-sonnet-4-6"}
+        tier_1_models = {"claude-opus-4-20250514", "claude-sonnet-4-20250514"}
         for _ in range(50):
             d = sel.select_model({"message_count": 1})
             assert d.model_id in tier_1_models
@@ -147,7 +147,7 @@ class TestGraduatedDemotionSelector:
         sel.set_model_universe(_make_models())
 
         # HTTP-level outcomes without qa_result should not count
-        d = RoutingDecision(model_id="claude-sonnet-4-6", backend="anthropic", confidence=0.8)
+        d = RoutingDecision(model_id="claude-sonnet-4-20250514", backend="anthropic", confidence=0.8)
         for _ in range(20):
             sel.record_outcome(d, RoutingOutcome(success=True))
 
