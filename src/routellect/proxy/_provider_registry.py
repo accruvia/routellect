@@ -19,9 +19,14 @@ _MODEL_CATALOG: dict[str, list[dict]] = {
         {"model_id": "o3-mini", "streaming": True, "tools": False, "ctx": 128_000, "tier": 4},
     ],
     "anthropic": [
-        {"model_id": "claude-opus-4-20250514", "streaming": True, "tools": True, "ctx": 200_000, "tier": 1},
-        {"model_id": "claude-sonnet-4-20250514", "streaming": True, "tools": True, "ctx": 200_000, "tier": 1},
-        {"model_id": "claude-haiku-4-5-20251001", "streaming": True, "tools": True, "ctx": 200_000, "tier": 3},
+        {"model_id": "claude-opus-4-6", "streaming": True, "tools": True, "ctx": 1_000_000, "tier": 1},
+        {"model_id": "claude-sonnet-4-6", "streaming": True, "tools": True, "ctx": 1_000_000, "tier": 1},
+        {"model_id": "claude-opus-4-5-20251101", "streaming": True, "tools": True, "ctx": 200_000, "tier": 2},
+        {"model_id": "claude-sonnet-4-5-20250929", "streaming": True, "tools": True, "ctx": 1_000_000, "tier": 2},
+        {"model_id": "claude-opus-4-1-20250805", "streaming": True, "tools": True, "ctx": 200_000, "tier": 3},
+        {"model_id": "claude-sonnet-4-20250514", "streaming": True, "tools": True, "ctx": 200_000, "tier": 3},
+        {"model_id": "claude-opus-4-20250514", "streaming": True, "tools": True, "ctx": 200_000, "tier": 3},
+        {"model_id": "claude-haiku-4-5-20251001", "streaming": True, "tools": True, "ctx": 200_000, "tier": 4},
     ],
     "google": [
         {"model_id": "gemini-2.5-pro", "streaming": True, "tools": True, "ctx": 1_000_000, "tier": 2},
