@@ -9,6 +9,7 @@ Quick start::
 from __future__ import annotations
 
 import logging
+import os
 import sys
 from typing import Any
 
@@ -115,13 +116,33 @@ def main() -> None:
 
     from routellect.proxy._credentials import has_credentials
 
-    if args.setup or not has_credentials():
+    if args.setup:
         from routellect.proxy._setup import run_setup
 
-        run_setup(force=args.setup)
+        run_setup(force=True)
+    elif not has_credentials():
+        # Try auto-discovery from environment variables first (headless/Docker)
+        from routellect.proxy._credentials import PROVIDER_ENV_VARS, save_credentials
+
+        auto_creds = {}
+        for provider, env_vars in PROVIDER_ENV_VARS.items():
+            for var in env_vars:
+                val = os.environ.get(var)
+                if val:
+                    auto_creds[provider] = val
+                    break
+
+        if auto_creds:
+            save_credentials(auto_creds)
+            providers = ", ".join(auto_creds.keys())
+            sys.stderr.write(f"  Auto-configured from environment: {providers}\n")
+        elif sys.stdin.isatty():
+            from routellect.proxy._setup import run_setup
+
+            run_setup(force=False)
 
     if not has_credentials():
-        sys.stderr.write("No credentials configured. Exiting.\n")
+        sys.stderr.write("No credentials configured. Set API key env vars or run with --setup.\n")
         raise SystemExit(1)
 
     # Show provider summary on normal startup
