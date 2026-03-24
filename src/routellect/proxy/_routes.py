@@ -246,6 +246,289 @@ class ProxyRoutes:
         }
         return JSONResponse(data, headers=headers)
 
+    async def anthropic_messages(self, request: Request) -> Any:
+        """POST /v1/messages — Anthropic Messages API compatible endpoint.
+
+        Accepts Anthropic-format requests, makes a routing decision, and
+        forwards to the real provider.  For Anthropic→Anthropic routing,
+        the request is passed through with the real API key.  For cross-
+        provider routing, litellm handles format translation.
+        """
+        body = await request.json()
+        messages = body.get("messages", [])
+        system = body.get("system", "")
+        stream = body.get("stream", False)
+        session_id = self._get_session_id(request, body)
+
+        # Build fingerprint from Anthropic-format request
+        fingerprint = {
+            "message_count": len(messages),
+            "has_system_prompt": bool(system),
+            "has_tools": bool(body.get("tools")),
+            "requested_model": body.get("model", ""),
+            "stream": stream,
+            "max_tokens": body.get("max_tokens"),
+        }
+
+        asyncio.create_task(self._maybe_grade_idle_sessions())
+
+        decision: RoutingDecision = self.selector.select_model(fingerprint)
+        user_message = self._get_last_user_message(body)
+        start = time.monotonic()
+
+        # If routing to an Anthropic model, pass through directly via httpx
+        # to preserve the native Anthropic request format exactly.
+        if decision.backend == "anthropic":
+            return await self._anthropic_passthrough(
+                body, decision, start, stream, session_id, user_message,
+            )
+
+        # Cross-provider: convert Anthropic format to OpenAI via litellm
+        openai_messages = []
+        if system:
+            sys_text = system if isinstance(system, str) else json.dumps(system)
+            openai_messages.append({"role": "system", "content": sys_text})
+        for msg in messages:
+            content = msg.get("content", "")
+            if isinstance(content, list):
+                # Anthropic content blocks → extract text
+                parts = [b.get("text", "") for b in content if b.get("type") == "text"]
+                content = "\n".join(parts)
+            openai_messages.append({"role": msg.get("role", "user"), "content": content})
+
+        fwd_kwargs: dict[str, Any] = {}
+        for key in ("temperature", "max_tokens", "top_p", "stop"):
+            if key in body:
+                fwd_kwargs[key] = body[key]
+
+        try:
+            response = await forward_completion(
+                provider=decision.backend,
+                model_id=decision.model_id,
+                messages=openai_messages,
+                stream=False,
+                credentials=self.credentials,
+                **fwd_kwargs,
+            )
+        except Exception as exc:
+            elapsed_ms = int((time.monotonic() - start) * 1000)
+            self.selector.record_outcome(
+                decision,
+                RoutingOutcome(success=False, latency_ms=elapsed_ms, failure_kind="provider_error"),
+            )
+            message = scrub_keys(str(exc))
+            return JSONResponse(
+                {"type": "error", "error": {"type": "api_error", "message": message}},
+                status_code=502,
+            )
+
+        elapsed_ms = int((time.monotonic() - start) * 1000)
+        data = response.model_dump() if hasattr(response, "model_dump") else response
+        usage = data.get("usage", {})
+
+        # Convert OpenAI response back to Anthropic format
+        content_text = ""
+        choices = data.get("choices", [])
+        if choices:
+            content_text = choices[0].get("message", {}).get("content", "")
+
+        anthropic_response = {
+            "id": data.get("id", f"msg_{uuid.uuid4().hex[:24]}"),
+            "type": "message",
+            "role": "assistant",
+            "model": decision.model_id,
+            "content": [{"type": "text", "text": content_text}],
+            "stop_reason": "end_turn",
+            "stop_sequence": None,
+            "usage": {
+                "input_tokens": usage.get("prompt_tokens", 0),
+                "output_tokens": usage.get("completion_tokens", 0),
+            },
+        }
+
+        self.selector.record_outcome(
+            decision,
+            RoutingOutcome(
+                success=True,
+                latency_ms=elapsed_ms,
+                input_tokens=usage.get("prompt_tokens", 0),
+                output_tokens=usage.get("completion_tokens", 0),
+            ),
+        )
+
+        msg_idx = self._session_msg_counters.get(session_id, 0)
+        self._session_msg_counters[session_id] = msg_idx + 1
+        self.grader.record_exchange(
+            session_id=session_id,
+            message_index=msg_idx,
+            user_message=user_message,
+            assistant_response=content_text[:2000],
+            decision=decision,
+            latency_ms=elapsed_ms,
+            input_tokens=usage.get("prompt_tokens", 0),
+            output_tokens=usage.get("completion_tokens", 0),
+        )
+
+        headers = {
+            "x-routellect-model": decision.model_id,
+            "x-routellect-routed": "true",
+        }
+        return JSONResponse(anthropic_response, headers=headers)
+
+    async def _anthropic_passthrough(
+        self,
+        body: dict[str, Any],
+        decision: RoutingDecision,
+        start: float,
+        stream: bool,
+        session_id: str,
+        user_message: str,
+    ) -> Any:
+        """Forward an Anthropic-format request directly to Anthropic's API.
+
+        Preserves the exact request format — no translation needed.
+        Just swaps the model and injects the real API key.
+        """
+        import httpx
+
+        body["model"] = decision.model_id
+        api_key = self.credentials.get("anthropic", "")
+
+        headers = {
+            "x-api-key": api_key,
+            "anthropic-version": "2023-06-01",
+            "content-type": "application/json",
+        }
+
+        if stream:
+            return await self._anthropic_stream(body, headers, decision, start, session_id, user_message)
+
+        try:
+            async with httpx.AsyncClient(timeout=120) as client:
+                resp = await client.post(
+                    "https://api.anthropic.com/v1/messages",
+                    json=body,
+                    headers=headers,
+                )
+        except Exception as exc:
+            elapsed_ms = int((time.monotonic() - start) * 1000)
+            self.selector.record_outcome(
+                decision,
+                RoutingOutcome(success=False, latency_ms=elapsed_ms, failure_kind="provider_error"),
+            )
+            message = scrub_keys(str(exc))
+            return JSONResponse(
+                {"type": "error", "error": {"type": "api_error", "message": message}},
+                status_code=502,
+            )
+
+        elapsed_ms = int((time.monotonic() - start) * 1000)
+        data = resp.json()
+
+        if resp.status_code >= 400:
+            self.selector.record_outcome(
+                decision,
+                RoutingOutcome(success=False, latency_ms=elapsed_ms, failure_kind="provider_error"),
+            )
+            return JSONResponse(data, status_code=resp.status_code)
+
+        usage = data.get("usage", {})
+        input_tokens = usage.get("input_tokens", 0)
+        output_tokens = usage.get("output_tokens", 0)
+
+        self.selector.record_outcome(
+            decision,
+            RoutingOutcome(
+                success=True,
+                latency_ms=elapsed_ms,
+                input_tokens=input_tokens,
+                output_tokens=output_tokens,
+            ),
+        )
+
+        # Extract assistant text for grading
+        content_blocks = data.get("content", [])
+        assistant_text = " ".join(
+            b.get("text", "") for b in content_blocks if b.get("type") == "text"
+        )
+
+        msg_idx = self._session_msg_counters.get(session_id, 0)
+        self._session_msg_counters[session_id] = msg_idx + 1
+        self.grader.record_exchange(
+            session_id=session_id,
+            message_index=msg_idx,
+            user_message=user_message,
+            assistant_response=assistant_text[:2000],
+            decision=decision,
+            latency_ms=elapsed_ms,
+            input_tokens=input_tokens,
+            output_tokens=output_tokens,
+        )
+
+        resp_headers = {
+            "x-routellect-model": decision.model_id,
+            "x-routellect-routed": "true",
+        }
+        return JSONResponse(data, headers=resp_headers)
+
+    async def _anthropic_stream(
+        self,
+        body: dict[str, Any],
+        headers: dict[str, str],
+        decision: RoutingDecision,
+        start: float,
+        session_id: str,
+        user_message: str,
+    ) -> StreamingResponse:
+        """Stream an Anthropic-format response."""
+        import httpx
+
+        collected_content: list[str] = []
+
+        async def event_generator():
+            try:
+                async with httpx.AsyncClient(timeout=120) as client:
+                    async with client.stream(
+                        "POST",
+                        "https://api.anthropic.com/v1/messages",
+                        json=body,
+                        headers=headers,
+                    ) as resp:
+                        async for line in resp.aiter_lines():
+                            if line.startswith("data: "):
+                                try:
+                                    chunk = json.loads(line[6:])
+                                    if chunk.get("type") == "content_block_delta":
+                                        delta_text = chunk.get("delta", {}).get("text", "")
+                                        if delta_text:
+                                            collected_content.append(delta_text)
+                                except json.JSONDecodeError:
+                                    pass
+                            yield line + "\n"
+            finally:
+                elapsed_ms = int((time.monotonic() - start) * 1000)
+                self.selector.record_outcome(
+                    decision,
+                    RoutingOutcome(success=True, latency_ms=elapsed_ms),
+                )
+                msg_idx = self._session_msg_counters.get(session_id, 0)
+                self._session_msg_counters[session_id] = msg_idx + 1
+                self.grader.record_exchange(
+                    session_id=session_id,
+                    message_index=msg_idx,
+                    user_message=user_message,
+                    assistant_response="".join(collected_content)[:2000],
+                    decision=decision,
+                    latency_ms=elapsed_ms,
+                )
+
+        resp_headers = {
+            "x-routellect-model": decision.model_id,
+            "x-routellect-routed": "true",
+            "content-type": "text/event-stream",
+        }
+        return StreamingResponse(event_generator(), media_type="text/event-stream", headers=resp_headers)
+
     async def list_models(self, request: Request) -> JSONResponse:
         """GET /v1/models — list available models in OpenAI format."""
         model_list = []

@@ -38,6 +38,7 @@ def create_app(
     app = Starlette(
         routes=[
             Route("/v1/chat/completions", routes.chat_completions, methods=["POST"]),
+            Route("/v1/messages", routes.anthropic_messages, methods=["POST"]),
             Route("/v1/models", routes.list_models, methods=["GET"]),
             Route("/health", routes.health, methods=["GET"]),
         ],
