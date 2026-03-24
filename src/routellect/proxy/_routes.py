@@ -107,11 +107,16 @@ class ProxyRoutes:
         """Accept any format, route through selector, return in original format."""
         body = await request.json()
 
-        # For Google, the model may be in the URL path
+        # For Google, the model is in the URL path and streaming is signaled by URL
         if fmt == InboundFormat.GOOGLE:
             model_path = request.path_params.get("model_path", "")
-            if model_path and "model" not in body:
-                body["model"] = model_path
+            if model_path:
+                # Strip :generateContent or :streamGenerateContent suffix
+                clean_model = model_path.split(":")[0] if ":" in model_path else model_path
+                body["model"] = clean_model
+                # Google signals streaming via URL path, not body field
+                if "streamGenerateContent" in model_path:
+                    body["stream"] = True
 
         normalized = normalize_to_openai(body, fmt)
         fingerprint = build_task_fingerprint(normalized)
@@ -246,8 +251,9 @@ class ProxyRoutes:
                 )
 
         headers = self._response_headers(decision, session_id)
-        headers["content-type"] = "text/event-stream"
-        return StreamingResponse(event_generator(), media_type="text/event-stream", headers=headers)
+        media = "text/event-stream"
+        headers["content-type"] = media
+        return StreamingResponse(event_generator(), media_type=media, headers=headers)
 
     # ------------------------------------------------------------------
     # Outcome recording (one place, not six)

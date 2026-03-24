@@ -304,7 +304,7 @@ class StreamState:
 
 
 def stream_prologue(fmt: InboundFormat, state: StreamState) -> list[str]:
-    """SSE lines to emit before the first content chunk."""
+    """Lines to emit before the first content chunk."""
     if fmt == InboundFormat.ANTHROPIC:
         msg_start = {
             "type": "message_start",
@@ -388,7 +388,7 @@ def translate_stream_chunk(
                     }
                 ],
             }
-            lines.append(f"data: {json.dumps(chunk_resp)}\n\n")
+            lines.append(f"data: {json.dumps(chunk_resp)}\r\n\r\n")
 
     return lines
 
@@ -413,11 +413,15 @@ def stream_epilogue(fmt: InboundFormat, state: StreamState) -> list[str]:
         ]
 
     if fmt == InboundFormat.GOOGLE:
-        # Final chunk with usage metadata
+        # Final SSE chunk with usage metadata
+        final_text = "".join(state.collected_content)
         final = {
             "candidates": [
                 {
-                    "content": {"role": "model", "parts": []},
+                    "content": {
+                        "role": "model",
+                        "parts": [{"text": final_text}] if final_text else [],
+                    },
                     "finishReason": "STOP",
                 }
             ],
@@ -427,7 +431,7 @@ def stream_epilogue(fmt: InboundFormat, state: StreamState) -> list[str]:
                 "totalTokenCount": state.input_tokens + state.output_tokens,
             },
         }
-        return [f"data: {json.dumps(final)}\n\n"]
+        return [f"data: {json.dumps(final)}\r\n\r\n"]
 
     return []
 
