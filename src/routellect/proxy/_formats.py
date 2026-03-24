@@ -413,14 +413,13 @@ def stream_epilogue(fmt: InboundFormat, state: StreamState) -> list[str]:
         ]
 
     if fmt == InboundFormat.GOOGLE:
-        # Final SSE chunk with usage metadata
-        final_text = "".join(state.collected_content)
+        # Final SSE chunk with usage metadata — no content (already streamed)
         final = {
             "candidates": [
                 {
                     "content": {
                         "role": "model",
-                        "parts": [{"text": final_text}] if final_text else [],
+                        "parts": [],
                     },
                     "finishReason": "STOP",
                 }
