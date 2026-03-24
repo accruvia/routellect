@@ -362,8 +362,6 @@ def _response_to_google(data: dict[str, Any], original_model: str) -> dict[str, 
             }
         })
 
-    finish = "STOP" if not tool_calls else "TOOL_CALLS"
-
     return {
         "candidates": [
             {
@@ -371,7 +369,7 @@ def _response_to_google(data: dict[str, Any], original_model: str) -> dict[str, 
                     "role": "model",
                     "parts": parts if parts else [{"text": ""}],
                 },
-                "finishReason": finish,
+                "finishReason": "STOP",
             }
         ],
         "usageMetadata": {
@@ -564,8 +562,6 @@ def stream_epilogue(fmt: InboundFormat, state: StreamState) -> list[str]:
                 }
             })
 
-        finish = "TOOL_CALLS" if tool_parts else "STOP"
-
         final = {
             "candidates": [
                 {
@@ -573,7 +569,7 @@ def stream_epilogue(fmt: InboundFormat, state: StreamState) -> list[str]:
                         "role": "model",
                         "parts": tool_parts,
                     },
-                    "finishReason": finish,
+                    "finishReason": "STOP",
                 }
             ],
             "usageMetadata": {

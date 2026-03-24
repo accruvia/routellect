@@ -416,7 +416,7 @@ class TestGoogleToolResponseTranslation:
         fc_part = [p for p in parts if "functionCall" in p][0]
         assert fc_part["functionCall"]["name"] == "get_weather"
         assert fc_part["functionCall"]["args"] == {"city": "Paris"}
-        assert result["candidates"][0]["finishReason"] == "TOOL_CALLS"
+        assert result["candidates"][0]["finishReason"] == "STOP"
 
     def test_response_text_only(self):
         data = {
