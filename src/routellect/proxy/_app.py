@@ -8,7 +8,7 @@ from starlette.routing import Route
 from routellect.proxy._config import ProxyConfig
 from routellect.proxy._middleware import AuthMiddleware, KeyScrubMiddleware, RequestLogMiddleware
 from routellect.proxy._routes import ProxyRoutes
-from routellect.proxy._selector import CostRankedSelector
+from routellect.proxy._selector import GraduatedDemotionSelector
 
 
 def create_app(
@@ -32,7 +32,7 @@ def create_app(
 
         credentials = load_credentials()
 
-    selector = config.selector or CostRankedSelector()
+    selector = config.selector or GraduatedDemotionSelector()
     routes = ProxyRoutes(selector=selector, credentials=credentials)
 
     app = Starlette(
