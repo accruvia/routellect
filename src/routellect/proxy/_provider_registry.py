@@ -29,8 +29,11 @@ _MODEL_CATALOG: dict[str, list[dict]] = {
         {"model_id": "claude-haiku-4-5-20251001", "streaming": True, "tools": True, "ctx": 200_000, "tier": 4},
     ],
     "google": [
+        {"model_id": "gemini-3.1-pro-preview", "streaming": True, "tools": True, "ctx": 1_000_000, "tier": 1},
+        {"model_id": "gemini-3-flash-preview", "streaming": True, "tools": True, "ctx": 1_000_000, "tier": 2},
         {"model_id": "gemini-2.5-pro", "streaming": True, "tools": True, "ctx": 1_000_000, "tier": 2},
-        {"model_id": "gemini-2.5-flash", "streaming": True, "tools": True, "ctx": 1_000_000, "tier": 4},
+        {"model_id": "gemini-2.5-flash", "streaming": True, "tools": True, "ctx": 1_000_000, "tier": 3},
+        {"model_id": "gemini-2.5-flash-lite", "streaming": True, "tools": True, "ctx": 1_000_000, "tier": 5},
     ],
     "groq": [
         {"model_id": "llama-3.3-70b-versatile", "streaming": True, "tools": True, "ctx": 128_000, "tier": 4},
