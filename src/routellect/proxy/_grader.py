@@ -31,7 +31,7 @@ logger = logging.getLogger("routellect.proxy")
 _GRADER_CANDIDATES = [
     ("claude-haiku-4-5-20251001", "anthropic"),
     ("gpt-4o-mini", "openai"),
-    ("gemini-2.5-flash", "google"),
+    ("gemini-2.5-pro", "google"),
     ("llama-3.3-70b-versatile", "groq"),
 ]
 DEFAULT_GRADER_MODEL = "claude-haiku-4-5-20251001"
