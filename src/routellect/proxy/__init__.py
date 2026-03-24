@@ -92,7 +92,26 @@ def main() -> None:
     parser.add_argument("--setup", action="store_true", help="Re-run the credential setup wizard")
     parser.add_argument("--host", type=str, default=None, help="Bind address (default: 127.0.0.1)")
     parser.add_argument("--port", type=int, default=None, help="Bind port (default: 11411)")
+    parser.add_argument("--grades", action="store_true", help="Show recent grades and exit")
+    parser.add_argument(
+        "--export",
+        type=str,
+        nargs="?",
+        const="routellect-export.zip",
+        metavar="FILE",
+        help="Export all grading data as a ZIP file (default: routellect-export.zip)",
+    )
     args = parser.parse_args()
+
+    # --grades: dump recent grades and exit
+    if args.grades:
+        _show_grades()
+        raise SystemExit(0)
+
+    # --export: write ZIP and exit
+    if args.export:
+        _run_export(args.export)
+        raise SystemExit(0)
 
     from routellect.proxy._credentials import has_credentials
 
@@ -122,3 +141,47 @@ def main() -> None:
     sys.stderr.write(f"  Providers: {', '.join(parts)}\n")
 
     serve(host=args.host, port=args.port)
+
+
+def _show_grades() -> None:
+    """Print recent grades to stdout."""
+    from routellect.proxy._grades_db import query_model_stats, query_recent_grades
+
+    stats = query_model_stats()
+    if stats:
+        sys.stdout.write("\n  Model Performance Summary\n")
+        sys.stdout.write("  " + "\u2500" * 60 + "\n")
+        sys.stdout.write(f"  {'Model':<30} {'Grade':<8} {'Count':<8} {'Avg Conf':<10}\n")
+        sys.stdout.write("  " + "\u2500" * 60 + "\n")
+        for row in stats:
+            sys.stdout.write(
+                f"  {row['model_used']:<30} {row['grade']:<8} {row['count']:<8} "
+                f"{row['avg_confidence']:.2f}\n"
+            )
+    else:
+        sys.stdout.write("\n  No grades recorded yet.\n")
+
+    recent = query_recent_grades(limit=20)
+    if recent:
+        sys.stdout.write(f"\n  Recent Grades (last {len(recent)})\n")
+        sys.stdout.write("  " + "\u2500" * 70 + "\n")
+        for g in recent:
+            expl = " [exploration]" if g.get("is_exploration") else ""
+            sys.stdout.write(
+                f"  {g['graded_at'][:19]}  {g['model_used']:<25} "
+                f"{g['grade']:<6} {g['confidence']:.1f}  {g['reason']}{expl}\n"
+            )
+    sys.stdout.write("\n")
+
+
+def _run_export(output_file: str) -> None:
+    """Export grading data to a ZIP file."""
+    from pathlib import Path
+
+    from routellect.proxy._grades_db import export_zip
+
+    out_path = Path(output_file)
+    export_zip(out_path)
+    size_kb = out_path.stat().st_size / 1024
+    sys.stderr.write(f"\n  Exported to {out_path.resolve()} ({size_kb:.1f} KB)\n")
+    sys.stderr.write(f"  Contains: sessions.csv, grades.csv, routing_log.csv, model_summary.csv\n\n")
