@@ -14,6 +14,7 @@ Supported formats:
 from __future__ import annotations
 
 import json
+import re
 import uuid
 from dataclasses import dataclass, field
 from enum import Enum
@@ -112,6 +113,28 @@ def _normalize_anthropic(body: dict[str, Any]) -> NormalizedRequest:
     )
 
 
+def _google_tools_to_openai(google_tools: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Convert Google functionDeclarations to OpenAI tools format."""
+    openai_tools: list[dict[str, Any]] = []
+    for tool_group in google_tools:
+        for decl in tool_group.get("function_declarations") or tool_group.get("functionDeclarations") or []:
+            openai_tools.append({
+                "type": "function",
+                "function": {
+                    "name": decl.get("name", ""),
+                    "description": decl.get("description", ""),
+                    "parameters": decl.get("parameters") or {},
+                },
+            })
+    return openai_tools
+
+
+def _google_tool_mode_to_openai(mode: str) -> str:
+    """Map Google tool_config mode to OpenAI tool_choice."""
+    mode_map = {"AUTO": "auto", "ANY": "required", "NONE": "none"}
+    return mode_map.get(mode.upper(), "auto")
+
+
 def _normalize_google(body: dict[str, Any]) -> NormalizedRequest:
     messages: list[dict[str, Any]] = []
 
@@ -146,6 +169,16 @@ def _normalize_google(body: dict[str, Any]) -> NormalizedRequest:
         params["top_p"] = gen_config["topP"]
     if "stopSequences" in gen_config:
         params["stop"] = gen_config["stopSequences"]
+
+    # Google tool definitions → OpenAI tools format
+    google_tools = body.get("tools") or []
+    openai_tools = _google_tools_to_openai(google_tools)
+    if openai_tools:
+        params["tools"] = openai_tools
+    tool_config = body.get("tool_config") or body.get("toolConfig") or {}
+    mode = (tool_config.get("function_calling_config") or tool_config.get("functionCallingConfig") or {}).get("mode")
+    if mode:
+        params["tool_choice"] = _google_tool_mode_to_openai(mode)
 
     return NormalizedRequest(
         messages=messages,
@@ -235,7 +268,28 @@ def _sanitize_response(data: dict[str, Any]) -> dict[str, Any]:
         if msg.get("content") is None and reasoning_tokens > 0:
             msg["content"] = ""
 
+        # Strip thinking text embedded in content (e.g. Gemini's chain-of-thought)
+        for obj in (msg, delta):
+            content = obj.get("content")
+            if isinstance(content, str):
+                obj["content"] = _strip_thinking_text(content)
+
     return data
+
+
+# Patterns for thinking text that models emit as regular content.
+_THINKING_RE = re.compile(
+    r"<thinking>.*?</thinking>\s*"
+    r"|<thought>.*?</thought>\s*"
+    r"|<reasoning>.*?</reasoning>\s*"
+    r"|<internal_monologue>.*?</internal_monologue>\s*",
+    re.DOTALL | re.IGNORECASE,
+)
+
+
+def _strip_thinking_text(content: str) -> str:
+    """Remove thinking/reasoning blocks that models embed in text content."""
+    return _THINKING_RE.sub("", content).lstrip()
 
 
 def translate_response(
@@ -282,19 +336,42 @@ def _response_to_anthropic(data: dict[str, Any], original_model: str) -> dict[st
 def _response_to_google(data: dict[str, Any], original_model: str) -> dict[str, Any]:
     usage = data.get("usage") or {}
     content_text = ""
+    tool_calls: list[dict[str, Any]] = []
     choices = data.get("choices") or []
     if choices:
         msg = choices[0].get("message") or {}
         content_text = msg.get("content") or ""
+        tool_calls = msg.get("tool_calls") or []
+
+    # Build parts: text content + any function calls
+    parts: list[dict[str, Any]] = []
+    if content_text:
+        parts.append({"text": content_text})
+    for tc in tool_calls:
+        fn = tc.get("function") or {}
+        args = fn.get("arguments", "{}")
+        if isinstance(args, str):
+            try:
+                args = json.loads(args)
+            except (json.JSONDecodeError, TypeError):
+                args = {}
+        parts.append({
+            "functionCall": {
+                "name": fn.get("name", ""),
+                "args": args,
+            }
+        })
+
+    finish = "STOP" if not tool_calls else "TOOL_CALLS"
 
     return {
         "candidates": [
             {
                 "content": {
                     "role": "model",
-                    "parts": [{"text": content_text}],
+                    "parts": parts if parts else [{"text": ""}],
                 },
-                "finishReason": "STOP",
+                "finishReason": finish,
             }
         ],
         "usageMetadata": {
@@ -331,6 +408,7 @@ class StreamState:
     msg_id: str = ""
     original_model: str = ""
     collected_content: list[str] = field(default_factory=list)
+    collected_tool_calls: dict[int, dict[str, Any]] = field(default_factory=dict)
     input_tokens: int = 0
     output_tokens: int = 0
 
@@ -388,12 +466,30 @@ def translate_stream_chunk(
         lines.extend(stream_prologue(fmt, state))
         state.started = True
 
-    # Extract content delta and usage from OpenAI chunk
+    # Extract content delta, tool call deltas, and usage from OpenAI chunk
     choices = chunk_data.get("choices") or []
     text = ""
     if choices:
         delta = (choices[0].get("delta") or {})
         text = delta.get("content") or ""
+        # Accumulate streamed tool call fragments
+        for tc in delta.get("tool_calls") or []:
+            idx = tc.get("index", 0)
+            if idx not in state.collected_tool_calls:
+                state.collected_tool_calls[idx] = {
+                    "id": tc.get("id", ""),
+                    "type": "function",
+                    "function": {"name": "", "arguments": ""},
+                }
+            entry = state.collected_tool_calls[idx]
+            if tc.get("id"):
+                entry["id"] = tc["id"]
+            fn = tc.get("function") or {}
+            if fn.get("name"):
+                entry["function"]["name"] += fn["name"]
+            if fn.get("arguments"):
+                entry["function"]["arguments"] += fn["arguments"]
+
     usage = chunk_data.get("usage") or {}
     if usage.get("prompt_tokens"):
         state.input_tokens = usage["prompt_tokens"]
@@ -452,15 +548,32 @@ def stream_epilogue(fmt: InboundFormat, state: StreamState) -> list[str]:
         ]
 
     if fmt == InboundFormat.GOOGLE:
-        # Final SSE chunk with usage metadata — no content (already streamed)
+        # Build parts for any accumulated tool calls
+        tool_parts: list[dict[str, Any]] = []
+        for _idx, tc in sorted(state.collected_tool_calls.items()):
+            fn = tc.get("function") or {}
+            args_str = fn.get("arguments", "{}")
+            try:
+                args = json.loads(args_str)
+            except (json.JSONDecodeError, TypeError):
+                args = {}
+            tool_parts.append({
+                "functionCall": {
+                    "name": fn.get("name", ""),
+                    "args": args,
+                }
+            })
+
+        finish = "TOOL_CALLS" if tool_parts else "STOP"
+
         final = {
             "candidates": [
                 {
                     "content": {
                         "role": "model",
-                        "parts": [],
+                        "parts": tool_parts,
                     },
-                    "finishReason": "STOP",
+                    "finishReason": finish,
                 }
             ],
             "usageMetadata": {

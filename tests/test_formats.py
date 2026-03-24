@@ -5,6 +5,9 @@ from __future__ import annotations
 from routellect.proxy._formats import (
     InboundFormat,
     StreamState,
+    _google_tools_to_openai,
+    _google_tool_mode_to_openai,
+    _strip_thinking_text,
     build_task_fingerprint,
     detect_format,
     error_response,
@@ -301,3 +304,174 @@ class TestExtractHelpers:
 
     def test_extract_usage_empty(self):
         assert extract_usage({}) == (0, 0)
+
+
+class TestGoogleToolNormalization:
+    """Test Google functionDeclarations → OpenAI tools conversion."""
+
+    def test_basic_function_declarations(self):
+        google_tools = [
+            {
+                "functionDeclarations": [
+                    {
+                        "name": "get_weather",
+                        "description": "Get weather for a city",
+                        "parameters": {
+                            "type": "object",
+                            "properties": {"city": {"type": "string"}},
+                        },
+                    }
+                ]
+            }
+        ]
+        result = _google_tools_to_openai(google_tools)
+        assert len(result) == 1
+        assert result[0]["type"] == "function"
+        assert result[0]["function"]["name"] == "get_weather"
+        assert result[0]["function"]["description"] == "Get weather for a city"
+        assert result[0]["function"]["parameters"]["type"] == "object"
+
+    def test_snake_case_key(self):
+        google_tools = [
+            {
+                "function_declarations": [
+                    {"name": "do_thing", "description": "Does a thing", "parameters": {}},
+                ]
+            }
+        ]
+        result = _google_tools_to_openai(google_tools)
+        assert len(result) == 1
+        assert result[0]["function"]["name"] == "do_thing"
+
+    def test_multiple_declarations(self):
+        google_tools = [
+            {
+                "functionDeclarations": [
+                    {"name": "tool_a", "description": "A"},
+                    {"name": "tool_b", "description": "B"},
+                ]
+            }
+        ]
+        result = _google_tools_to_openai(google_tools)
+        assert len(result) == 2
+        assert result[0]["function"]["name"] == "tool_a"
+        assert result[1]["function"]["name"] == "tool_b"
+
+    def test_empty_tools(self):
+        assert _google_tools_to_openai([]) == []
+
+    def test_tool_mode_mapping(self):
+        assert _google_tool_mode_to_openai("AUTO") == "auto"
+        assert _google_tool_mode_to_openai("ANY") == "required"
+        assert _google_tool_mode_to_openai("NONE") == "none"
+        assert _google_tool_mode_to_openai("auto") == "auto"
+
+    def test_normalize_google_with_tools(self):
+        body = {
+            "contents": [{"role": "user", "parts": [{"text": "hi"}]}],
+            "tools": [
+                {
+                    "functionDeclarations": [
+                        {"name": "read", "description": "Read a file", "parameters": {}},
+                    ]
+                }
+            ],
+            "toolConfig": {
+                "functionCallingConfig": {"mode": "AUTO"},
+            },
+        }
+        req = normalize_to_openai(body, InboundFormat.GOOGLE)
+        assert len(req.params["tools"]) == 1
+        assert req.params["tools"][0]["function"]["name"] == "read"
+        assert req.params["tool_choice"] == "auto"
+
+
+class TestGoogleToolResponseTranslation:
+    """Test OpenAI tool_calls → Google functionCall response translation."""
+
+    def test_response_with_tool_calls(self):
+        data = {
+            "choices": [
+                {
+                    "message": {
+                        "content": None,
+                        "tool_calls": [
+                            {
+                                "id": "call_1",
+                                "type": "function",
+                                "function": {
+                                    "name": "get_weather",
+                                    "arguments": '{"city": "Paris"}',
+                                },
+                            }
+                        ],
+                    }
+                }
+            ],
+            "usage": {"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15},
+        }
+        result = translate_response(data, InboundFormat.GOOGLE, "gemini-2.5-pro")
+        parts = result["candidates"][0]["content"]["parts"]
+        assert any("functionCall" in p for p in parts)
+        fc_part = [p for p in parts if "functionCall" in p][0]
+        assert fc_part["functionCall"]["name"] == "get_weather"
+        assert fc_part["functionCall"]["args"] == {"city": "Paris"}
+        assert result["candidates"][0]["finishReason"] == "TOOL_CALLS"
+
+    def test_response_text_only(self):
+        data = {
+            "choices": [{"message": {"content": "Hello!"}}],
+            "usage": {"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15},
+        }
+        result = translate_response(data, InboundFormat.GOOGLE, "gemini-2.5-pro")
+        assert result["candidates"][0]["content"]["parts"] == [{"text": "Hello!"}]
+        assert result["candidates"][0]["finishReason"] == "STOP"
+
+
+class TestThinkingTextStripping:
+    """Test that thinking/reasoning blocks are stripped from content."""
+
+    def test_strip_thinking_tags(self):
+        content = "<thinking>Let me reason about this...</thinking>The answer is 42."
+        assert _strip_thinking_text(content) == "The answer is 42."
+
+    def test_strip_thought_tags(self):
+        content = "<thought>Internal reasoning here</thought>Hello!"
+        assert _strip_thinking_text(content) == "Hello!"
+
+    def test_strip_reasoning_tags(self):
+        content = "<reasoning>Step 1... Step 2...</reasoning>Result: yes"
+        assert _strip_thinking_text(content) == "Result: yes"
+
+    def test_strip_internal_monologue(self):
+        content = "<internal_monologue>Hmm, should I call a tool?</internal_monologue>I'll help you."
+        assert _strip_thinking_text(content) == "I'll help you."
+
+    def test_multiline_thinking(self):
+        content = "<thinking>\nLet me think step by step.\n1. First\n2. Second\n</thinking>\nThe answer is Paris."
+        assert _strip_thinking_text(content) == "The answer is Paris."
+
+    def test_no_thinking_passthrough(self):
+        content = "Just a normal response."
+        assert _strip_thinking_text(content) == "Just a normal response."
+
+    def test_empty_string(self):
+        assert _strip_thinking_text("") == ""
+
+    def test_sanitize_response_strips_thinking(self):
+        data = {
+            "choices": [
+                {
+                    "message": {
+                        "content": "<thinking>Let me plan...</thinking>Here's your answer.",
+                    }
+                }
+            ],
+        }
+        from routellect.proxy._formats import _sanitize_response
+        result = _sanitize_response(data)
+        assert result["choices"][0]["message"]["content"] == "Here's your answer."
+
+    def test_case_insensitive(self):
+        content = "<THINKING>Uppercase thinking</THINKING>Answer."
+        assert _strip_thinking_text(content) == "Answer."
