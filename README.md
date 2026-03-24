@@ -17,27 +17,55 @@ Your app  →  routellect proxy (:11411/v1)  →  real LLM provider
 
 ## Quick Start
 
-### 1. Install
+### 1. Install and Run
+
+**Docker (recommended):**
 
 ```bash
-# From PyPI (when published):
-pip install routellect[proxy]
+docker build -t routellect .
+docker run -it -p 11411:11411 -v ~/.routellect:/root/.routellect routellect
+```
 
-# From source:
+**Docker Compose (with OpenClaw):**
+
+```yaml
+services:
+  routellect:
+    build: ./routellect
+    ports:
+      - "11411:11411"
+    volumes:
+      - ~/.routellect:/root/.routellect
+    environment:
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+
+  openclaw:
+    # your existing openclaw service
+    environment:
+      - OPENAI_BASE_URL=http://routellect:11411/v1
+```
+
+**pipx (if you prefer local install):**
+
+```bash
+pipx install routellect[proxy]
+routellect
+```
+
+**From source (contributors only):**
+
+```bash
 git clone https://github.com/soverton/routellect.git
 cd routellect
-python3 -m venv .venv
-. .venv/bin/activate
+python3 -m venv .venv && . .venv/bin/activate
 pip install -e '.[proxy]'
+routellect
 ```
 
-### 2. Run
+### 2. First-Run Setup
 
-```bash
-python -m routellect.proxy
-```
-
-On first run, an interactive setup wizard prompts for your provider API keys:
+On first run, an interactive wizard prompts for your provider API keys:
 
 ```
   routellect proxy — first-time setup
