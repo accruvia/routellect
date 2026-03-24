@@ -400,6 +400,7 @@ class ProxyRoutes:
         if stream:
             return await self._cross_provider_stream(
                 response, decision, start, session_id, user_message,
+                requested_model=body.get("model", decision.model_id),
             )
 
         elapsed_ms = int((time.monotonic() - start) * 1000)
@@ -412,16 +413,19 @@ class ProxyRoutes:
             msg = choices[0].get("message") or {}
             content_text = msg.get("content") or ""
 
+        requested_model = body.get("model", decision.model_id)
         anthropic_response = {
             "id": data.get("id", f"msg_{uuid.uuid4().hex[:24]}"),
             "type": "message",
             "role": "assistant",
-            "model": decision.model_id,
+            "model": requested_model,
             "content": [{"type": "text", "text": content_text}],
             "stop_reason": "end_turn",
             "stop_sequence": None,
             "usage": {
                 "input_tokens": usage.get("prompt_tokens", 0),
+                "cache_creation_input_tokens": 0,
+                "cache_read_input_tokens": 0,
                 "output_tokens": usage.get("completion_tokens", 0),
             },
         }
@@ -462,17 +466,38 @@ class ProxyRoutes:
         start: float,
         session_id: str,
         user_message: str,
+        requested_model: str = "",
     ) -> StreamingResponse:
         """Stream a cross-provider response, translating OpenAI SSE to Anthropic SSE."""
         collected_content: list[str] = []
         msg_id = f"msg_{uuid.uuid4().hex[:24]}"
         input_tokens = 0
         output_tokens = 0
+        # Report the model the client asked for, not the one we actually used
+        report_model = requested_model or decision.model_id
 
         async def event_generator():
             nonlocal input_tokens, output_tokens
-            # Emit Anthropic message_start
-            yield f"event: message_start\ndata: {json.dumps({'type': 'message_start', 'message': {'id': msg_id, 'type': 'message', 'role': 'assistant', 'model': decision.model_id, 'content': [], 'stop_reason': None, 'stop_sequence': None, 'usage': {'input_tokens': 0, 'output_tokens': 0}}})}\n\n"
+            # Emit Anthropic message_start — match Anthropic's exact format
+            msg_start = {
+                'type': 'message_start',
+                'message': {
+                    'id': msg_id,
+                    'type': 'message',
+                    'role': 'assistant',
+                    'model': report_model,
+                    'content': [],
+                    'stop_reason': None,
+                    'stop_sequence': None,
+                    'usage': {
+                        'input_tokens': 0,
+                        'cache_creation_input_tokens': 0,
+                        'cache_read_input_tokens': 0,
+                        'output_tokens': 0,
+                    },
+                },
+            }
+            yield f"event: message_start\ndata: {json.dumps(msg_start)}\n\n"
             yield f"event: content_block_start\ndata: {json.dumps({'type': 'content_block_start', 'index': 0, 'content_block': {'type': 'text', 'text': ''}})}\n\n"
 
             try:
