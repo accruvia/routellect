@@ -26,7 +26,14 @@ from routellect.proxy._grades_db import (
 
 logger = logging.getLogger("routellect.proxy")
 
-# Default grading model — cheapest option that can follow structured output.
+# Grading model preference order — pick the first available provider.
+# Cheapest models that can reliably follow structured output instructions.
+_GRADER_CANDIDATES = [
+    ("claude-haiku-4-5-20251001", "anthropic"),
+    ("gpt-4o-mini", "openai"),
+    ("gemini-2.5-flash", "google"),
+    ("llama-3.3-70b-versatile", "groq"),
+]
 DEFAULT_GRADER_MODEL = "claude-haiku-4-5-20251001"
 DEFAULT_GRADER_PROVIDER = "anthropic"
 DEFAULT_BATCH_SIZE = 10
@@ -102,18 +109,32 @@ class Grader:
         self,
         credentials: dict[str, str],
         selector: Any = None,
-        grader_model: str = DEFAULT_GRADER_MODEL,
-        grader_provider: str = DEFAULT_GRADER_PROVIDER,
+        grader_model: str | None = None,
+        grader_provider: str | None = None,
         batch_size: int = DEFAULT_BATCH_SIZE,
         idle_seconds: float = DEFAULT_IDLE_SECONDS,
     ) -> None:
         self.credentials = credentials
         self.selector = selector
-        self.grader_model = grader_model
-        self.grader_provider = grader_provider
         self.batch_size = batch_size
         self.idle_seconds = idle_seconds
         self._sessions: dict[str, SessionBuffer] = {}
+        self._failed_grader_providers: set[str] = set()
+
+        # Auto-select grader from available credentials
+        if grader_model and grader_provider:
+            self.grader_model = grader_model
+            self.grader_provider = grader_provider
+        else:
+            self.grader_model, self.grader_provider = self._pick_grader()
+
+    def _pick_grader(self) -> tuple[str, str]:
+        """Pick the best available grading model from configured providers."""
+        for model, provider in _GRADER_CANDIDATES:
+            if provider in self.credentials and provider not in self._failed_grader_providers:
+                return model, provider
+        # Fallback to defaults even if not in credentials
+        return DEFAULT_GRADER_MODEL, DEFAULT_GRADER_PROVIDER
 
     def get_or_create_session(self, session_id: str | None = None) -> SessionBuffer:
         if session_id is None:
@@ -255,19 +276,45 @@ class Grader:
 
         messages = self._build_grading_messages(buf)
         start = time.monotonic()
+        response = None
 
-        try:
-            response = await forward_completion(
-                provider=self.grader_provider,
-                model_id=self.grader_model,
-                messages=messages,
-                stream=False,
-                credentials=self.credentials,
-                max_tokens=1000,
-                temperature=0,
-            )
-        except Exception as exc:
-            logger.error("Grading call failed for session %s: %s", session_id, exc)
+        # Try current grader, fail over to alternatives on billing/auth errors.
+        providers_tried: set[str] = set()
+        while True:
+            try:
+                response = await forward_completion(
+                    provider=self.grader_provider,
+                    model_id=self.grader_model,
+                    messages=messages,
+                    stream=False,
+                    credentials=self.credentials,
+                    max_tokens=1000,
+                    temperature=0,
+                )
+                break
+            except Exception as exc:
+                error_msg = str(exc).lower()
+                providers_tried.add(self.grader_provider)
+                is_down = any(p in error_msg for p in (
+                    "credit balance", "billing", "quota", "authentication",
+                    "invalid_api_key", "invalid bearer", "payment required",
+                ))
+                if is_down:
+                    self._failed_grader_providers.add(self.grader_provider)
+                    old = f"{self.grader_provider}/{self.grader_model}"
+                    self.grader_model, self.grader_provider = self._pick_grader()
+                    if self.grader_provider in providers_tried:
+                        logger.error("All grader providers exhausted for session %s", session_id)
+                        return []
+                    logger.warning(
+                        "Grader %s is down, failing over to %s/%s",
+                        old, self.grader_provider, self.grader_model,
+                    )
+                    continue
+                logger.error("Grading call failed for session %s: %s", session_id, exc)
+                return []
+
+        if response is None:
             return []
 
         elapsed_ms = int((time.monotonic() - start) * 1000)

@@ -1,188 +1,225 @@
 <!DOCTYPE html>
-<html>
+<html lang="en">
 <head>
-  <title>Routellect Dashboard</title>
+  <title>Routellect</title>
   <link href="https://cdn.jsdelivr.net/npm/vuetify@3.4.0/dist/vuetify.min.css" rel="stylesheet">
   <link href="https://cdn.jsdelivr.net/npm/@mdi/font@7.3.67/css/materialdesignicons.min.css" rel="stylesheet">
   <meta name="viewport" content="width=device-width, initial-scale=1">
+  <style>
+    body { margin: 0; background: #131313; }
+    .accruvia-card { background: #2a2a2a !important; border-radius: 4px !important; }
+    .accruvia-surface { background: #1c1b1b !important; }
+    .accruvia-text { color: #e2e3dd !important; }
+    .accruvia-muted { color: #c2c9b9 !important; }
+    .accruvia-primary { color: #9dd586 !important; }
+    .stat-value { font-size: 2rem; font-weight: 700; line-height: 1.2; }
+    .stat-label { font-size: 0.75rem; color: #c2c9b9; margin-top: 4px; }
+  </style>
 </head>
 <body>
 <div id="app">
-  <v-app theme="dark">
-    <v-app-bar color="grey-darken-4" density="compact">
-      <v-app-bar-title>
-        <span class="text-blue-lighten-2 font-weight-bold">routellect</span>
-        <span class="text-grey-lighten-1 ml-2 text-body-2">model routing dashboard</span>
-      </v-app-bar-title>
-      <template v-slot:append>
-        <v-chip :color="health.status === 'ok' ? 'green' : 'red'" size="small" variant="flat" class="mr-2">
-          {{ health.total_models || 0 }} models
-        </v-chip>
-        <v-btn icon="mdi-refresh" size="small" @click="refresh" :loading="loading"></v-btn>
-      </template>
+  <v-app>
+    <v-app-bar density="compact" elevation="0" style="background: #1c1b1b;">
+      <div class="d-flex align-center ml-4">
+        <img src="https://accruvia.com/img/logo-accruvia-color.png" alt="Accruvia" height="28" class="mr-3">
+        <span class="accruvia-primary font-weight-bold text-h6">routellect</span>
+      </div>
+      <v-spacer></v-spacer>
+      <v-chip v-if="health.status === 'ok'" color="#335028" variant="flat" size="small" class="mr-2">
+        <v-icon size="x-small" start icon="mdi-check-circle" color="#9dd586"></v-icon>
+        <span style="color: #9dd586;">{{ health.total_models || 0 }} models</span>
+      </v-chip>
+      <v-chip v-else color="#f2726a" variant="flat" size="small" class="mr-2">offline</v-chip>
+      <v-btn icon size="small" variant="text" @click="refresh" :loading="loading" style="color: #c2c9b9;">
+        <v-icon>mdi-refresh</v-icon>
+      </v-btn>
     </v-app-bar>
 
-    <v-main class="bg-grey-darken-4">
-      <v-container fluid>
-        <!-- Status Cards -->
+    <v-main style="background: #131313;">
+      <v-container fluid class="pa-4">
+
+        <!-- Summary Cards -->
         <v-row dense>
-          <v-col cols="12" md="3" v-for="stat in summaryCards" :key="stat.label">
-            <v-card color="grey-darken-3" variant="flat">
-              <v-card-text class="text-center">
-                <div class="text-h4 font-weight-bold" :class="stat.color">{{ stat.value }}</div>
-                <div class="text-grey-lighten-1 text-caption mt-1">{{ stat.label }}</div>
-              </v-card-text>
-            </v-card>
+          <v-col v-for="stat in summaryCards" :key="stat.label" cols="6" md="3">
+            <div class="accruvia-card pa-4 text-center" style="height: 100%;">
+              <div class="stat-value" :style="{ color: stat.hex }">{{ stat.value }}</div>
+              <div class="stat-label">{{ stat.label }}</div>
+            </div>
           </v-col>
         </v-row>
 
-        <!-- Model Performance -->
-        <v-row dense class="mt-2">
+        <!-- Model Performance + Sidebar -->
+        <v-row dense class="mt-3">
           <v-col cols="12" md="8">
-            <v-card color="grey-darken-3" variant="flat">
-              <v-card-title class="text-body-1 font-weight-bold">
-                <v-icon size="small" class="mr-1">mdi-chart-bar</v-icon>
-                Model Performance
-              </v-card-title>
-              <v-card-text>
-                <v-table density="compact" theme="dark">
-                  <thead>
-                    <tr>
-                      <th>Model</th>
-                      <th class="text-center">Calls</th>
-                      <th class="text-center">Pass</th>
-                      <th class="text-center">Fail</th>
-                      <th class="text-center">Pass Rate</th>
-                      <th class="text-center">Avg Latency</th>
-                      <th class="text-center">Avg Confidence</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    <tr v-for="m in modelStats" :key="m.model">
-                      <td>
-                        <v-chip :color="tierColor(m.tier)" size="x-small" variant="flat" class="mr-1">T{{ m.tier }}</v-chip>
-                        {{ m.model }}
-                      </td>
-                      <td class="text-center">{{ m.calls }}</td>
-                      <td class="text-center text-green">{{ m.pass }}</td>
-                      <td class="text-center text-red">{{ m.fail }}</td>
-                      <td class="text-center">
-                        <v-chip :color="m.passRate >= 80 ? 'green' : m.passRate >= 60 ? 'orange' : 'red'"
-                                size="x-small" variant="flat">
+            <div class="accruvia-card pa-4">
+              <div class="d-flex align-center mb-3">
+                <v-icon size="small" color="#9dd586" class="mr-2">mdi-chart-bar</v-icon>
+                <span class="accruvia-text font-weight-bold">Model Performance</span>
+                <v-spacer></v-spacer>
+                <v-tooltip location="bottom" max-width="320">
+                  <template v-slot:activator="{ props }">
+                    <v-icon v-bind="props" size="small" color="#42493d" class="ml-2">mdi-information-outline</v-icon>
+                  </template>
+                  <div style="font-size: 0.8rem; line-height: 1.4; color: #e2e3dd; background: #353535; padding: 8px 12px; border-radius: 4px;">
+                    <strong style="color: #9dd586;">Grades are not real-time.</strong><br>
+                    Routellect batches conversation exchanges and sends them
+                    to a grading model (Haiku) after 10 exchanges or 2 minutes
+                    of idle time. Models showing "N/A" have been called but
+                    not yet graded. Grades reflect user satisfaction signals
+                    (corrections, confirmations, topic changes) — not raw
+                    HTTP success.
+                  </div>
+                </v-tooltip>
+              </div>
+              <table style="width: 100%; border-collapse: collapse;">
+                <thead>
+                  <tr style="border-bottom: 1px solid #353535;">
+                    <th class="accruvia-muted text-left pa-2" style="font-weight: 500; font-size: 0.75rem;">Model</th>
+                    <th class="accruvia-muted text-center pa-2" style="font-weight: 500; font-size: 0.75rem;">Calls</th>
+                    <th class="accruvia-muted text-center pa-2" style="font-weight: 500; font-size: 0.75rem;">Pass</th>
+                    <th class="accruvia-muted text-center pa-2" style="font-weight: 500; font-size: 0.75rem;">Fail</th>
+                    <th class="accruvia-muted text-center pa-2" style="font-weight: 500; font-size: 0.75rem;">Rate</th>
+                    <th class="accruvia-muted text-center pa-2" style="font-weight: 500; font-size: 0.75rem;">Latency</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr v-for="m in modelStats" :key="m.model" style="border-bottom: 1px solid #1c1b1b;">
+                    <td class="pa-2">
+                      <v-chip :color="tierHex(m.tier)" size="x-small" variant="flat"
+                              style="font-size: 0.65rem; min-width: 28px;" class="mr-1">T{{ m.tier }}</v-chip>
+                      <span class="accruvia-text" style="font-size: 0.85rem;">{{ m.model }}</span>
+                    </td>
+                    <td class="text-center accruvia-text pa-2">{{ m.calls }}</td>
+                    <td class="text-center pa-2" style="color: #9dd586;">{{ m.pass }}</td>
+                    <td class="text-center pa-2" style="color: #f2726a;">{{ m.fail }}</td>
+                    <td class="text-center pa-2">
+                      <v-chip v-if="m.pass + m.fail + m.mixed > 0"
+                              :color="m.passRate >= 80 ? '#335028' : m.passRate >= 60 ? '#5c4a1a' : '#5c1a1a'"
+                              size="x-small" variant="flat">
+                        <span :style="{ color: m.passRate >= 80 ? '#9dd586' : m.passRate >= 60 ? '#e8c76a' : '#f2726a' }">
                           {{ m.passRate }}%
-                        </v-chip>
-                      </td>
-                      <td class="text-center text-grey-lighten-1">{{ m.avgLatency }}ms</td>
-                      <td class="text-center text-grey-lighten-1">{{ m.avgConfidence }}</td>
-                    </tr>
-                  </tbody>
-                </v-table>
-              </v-card-text>
-            </v-card>
+                        </span>
+                      </v-chip>
+                      <v-tooltip v-else location="top">
+                        <template v-slot:activator="{ props }">
+                          <span v-bind="props" class="accruvia-muted" style="font-size: 0.8rem; cursor: help;">N/A</span>
+                        </template>
+                        <span style="color: #e2e3dd;">Awaiting grading batch</span>
+                      </v-tooltip>
+                    </td>
+                    <td class="text-center accruvia-muted pa-2" style="font-size: 0.8rem;">{{ m.avgLatency }}ms</td>
+                  </tr>
+                  <tr v-if="modelStats.length === 0">
+                    <td colspan="6" class="text-center accruvia-muted pa-4">No data yet</td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
           </v-col>
 
-          <!-- Selector State -->
+          <!-- Sidebar -->
           <v-col cols="12" md="4">
-            <v-card color="grey-darken-3" variant="flat">
-              <v-card-title class="text-body-1 font-weight-bold">
-                <v-icon size="small" class="mr-1">mdi-state-machine</v-icon>
-                Selector State
-              </v-card-title>
-              <v-card-text>
-                <v-list density="compact" bg-color="transparent">
-                  <v-list-item>
-                    <template v-slot:prepend><v-icon size="small" color="blue">mdi-layers</v-icon></template>
-                    <v-list-item-title>Current Tier</v-list-item-title>
-                    <template v-slot:append>
-                      <v-chip :color="tierColor(selector.current_tier)" size="small" variant="flat">
-                        Tier {{ selector.current_tier }} ({{ selector.current_tier_label }})
-                      </v-chip>
-                    </template>
-                  </v-list-item>
-                  <v-list-item>
-                    <template v-slot:prepend><v-icon size="small" color="orange">mdi-flask</v-icon></template>
-                    <v-list-item-title>Trial Tier</v-list-item-title>
-                    <template v-slot:append>
-                      <v-chip :color="selector.trial_tier ? 'orange' : 'grey'" size="small" variant="flat">
-                        {{ selector.trial_tier ? 'Tier ' + selector.trial_tier : 'None' }}
-                      </v-chip>
-                    </template>
-                  </v-list-item>
-                  <v-list-item>
-                    <template v-slot:prepend><v-icon size="small" :color="selector.locked ? 'red' : 'green'">mdi-lock</v-icon></template>
-                    <v-list-item-title>Demotion</v-list-item-title>
-                    <template v-slot:append>
-                      <v-chip :color="selector.locked ? 'red' : 'green'" size="small" variant="flat">
-                        {{ selector.locked ? 'Locked' : 'Active' }}
-                      </v-chip>
-                    </template>
-                  </v-list-item>
-                </v-list>
-              </v-card-text>
-            </v-card>
+            <!-- Selector State -->
+            <div class="accruvia-card pa-4">
+              <div class="d-flex align-center mb-3">
+                <v-icon size="small" color="#9dd586" class="mr-2">mdi-state-machine</v-icon>
+                <span class="accruvia-text font-weight-bold">Selector</span>
+              </div>
+              <div class="d-flex justify-space-between align-center mb-2">
+                <span class="accruvia-muted" style="font-size: 0.85rem;">Current Tier</span>
+                <v-chip :color="tierHex(selector.current_tier)" size="small" variant="flat">
+                  T{{ selector.current_tier }} {{ selector.current_tier_label }}
+                </v-chip>
+              </div>
+              <div class="d-flex justify-space-between align-center mb-2">
+                <span class="accruvia-muted" style="font-size: 0.85rem;">Trial Tier</span>
+                <v-chip :color="selector.trial_tier ? '#5c4a1a' : '#353535'" size="small" variant="flat">
+                  <span :style="{ color: selector.trial_tier ? '#e8c76a' : '#c2c9b9' }">
+                    {{ selector.trial_tier ? 'T' + selector.trial_tier : 'None' }}
+                  </span>
+                </v-chip>
+              </div>
+              <div class="d-flex justify-space-between align-center">
+                <span class="accruvia-muted" style="font-size: 0.85rem;">Demotion</span>
+                <v-chip :color="selector.locked ? '#5c1a1a' : '#335028'" size="small" variant="flat">
+                  <span :style="{ color: selector.locked ? '#f2726a' : '#9dd586' }">
+                    {{ selector.locked ? 'Locked' : 'Active' }}
+                  </span>
+                </v-chip>
+              </div>
+            </div>
 
             <!-- Providers -->
-            <v-card color="grey-darken-3" variant="flat" class="mt-2">
-              <v-card-title class="text-body-1 font-weight-bold">
-                <v-icon size="small" class="mr-1">mdi-cloud</v-icon>
-                Providers
-              </v-card-title>
-              <v-card-text>
-                <v-chip v-for="(count, provider) in health.providers" :key="provider"
-                        :color="failedBackends.includes(provider) ? 'red' : 'green'"
+            <div class="accruvia-card pa-4 mt-3">
+              <div class="d-flex align-center mb-3">
+                <v-icon size="small" color="#7ac4e8" class="mr-2">mdi-cloud</v-icon>
+                <span class="accruvia-text font-weight-bold">Providers</span>
+              </div>
+              <div>
+                <v-chip v-for="(count, provider) in (health.providers || {})" :key="provider"
+                        :color="failedBackends.indexOf(provider) >= 0 ? '#5c1a1a' : '#335028'"
                         size="small" variant="flat" class="mr-1 mb-1">
-                  <v-icon size="x-small" start :icon="failedBackends.includes(provider) ? 'mdi-alert' : 'mdi-check'"></v-icon>
-                  {{ provider }} ({{ count }})
+                  <v-icon size="x-small" start
+                    :icon="failedBackends.indexOf(provider) >= 0 ? 'mdi-alert' : 'mdi-check'"
+                    :color="failedBackends.indexOf(provider) >= 0 ? '#f2726a' : '#9dd586'"></v-icon>
+                  <span :style="{ color: failedBackends.indexOf(provider) >= 0 ? '#f2726a' : '#9dd586' }">
+                    {{ provider }} ({{ count }})
+                  </span>
                 </v-chip>
-              </v-card-text>
-            </v-card>
+                <div v-if="!health.providers" class="accruvia-muted" style="font-size: 0.85rem;">Loading...</div>
+              </div>
+            </div>
           </v-col>
         </v-row>
 
         <!-- Recent Grades -->
-        <v-row dense class="mt-2">
+        <v-row dense class="mt-3">
           <v-col cols="12">
-            <v-card color="grey-darken-3" variant="flat">
-              <v-card-title class="text-body-1 font-weight-bold">
-                <v-icon size="small" class="mr-1">mdi-clipboard-check</v-icon>
-                Recent Grades
-              </v-card-title>
-              <v-card-text>
-                <v-table density="compact" theme="dark">
-                  <thead>
-                    <tr>
-                      <th>Time</th>
-                      <th>Model</th>
-                      <th class="text-center">Grade</th>
-                      <th class="text-center">Confidence</th>
-                      <th>Reason</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    <tr v-for="g in recentGrades" :key="g.graded_at + g.message_index">
-                      <td class="text-grey-lighten-1 text-caption">{{ formatTime(g.graded_at) }}</td>
-                      <td>{{ g.model_used }}</td>
-                      <td class="text-center">
-                        <v-chip :color="g.grade === 'pass' ? 'green' : g.grade === 'fail' ? 'red' : 'orange'"
-                                size="x-small" variant="flat">
+            <div class="accruvia-card pa-4">
+              <div class="d-flex align-center mb-3">
+                <v-icon size="small" color="#9dd586" class="mr-2">mdi-clipboard-check</v-icon>
+                <span class="accruvia-text font-weight-bold">Recent Grades</span>
+              </div>
+              <table style="width: 100%; border-collapse: collapse;">
+                <thead>
+                  <tr style="border-bottom: 1px solid #353535;">
+                    <th class="accruvia-muted text-left pa-2" style="font-weight: 500; font-size: 0.75rem;">Time</th>
+                    <th class="accruvia-muted text-left pa-2" style="font-weight: 500; font-size: 0.75rem;">Model</th>
+                    <th class="accruvia-muted text-center pa-2" style="font-weight: 500; font-size: 0.75rem;">Grade</th>
+                    <th class="accruvia-muted text-center pa-2" style="font-weight: 500; font-size: 0.75rem;">Conf</th>
+                    <th class="accruvia-muted text-left pa-2" style="font-weight: 500; font-size: 0.75rem;">Reason</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr v-for="(g, i) in recentGrades" :key="i" style="border-bottom: 1px solid #1c1b1b;">
+                    <td class="accruvia-muted pa-2" style="font-size: 0.8rem;">{{ formatTime(g.graded_at) }}</td>
+                    <td class="accruvia-text pa-2" style="font-size: 0.85rem;">{{ g.model_used }}</td>
+                    <td class="text-center pa-2">
+                      <v-chip
+                        :color="g.grade === 'pass' ? '#335028' : g.grade === 'fail' ? '#5c1a1a' : '#5c4a1a'"
+                        size="x-small" variant="flat">
+                        <span :style="{ color: g.grade === 'pass' ? '#9dd586' : g.grade === 'fail' ? '#f2726a' : '#e8c76a' }">
                           {{ g.grade }}
-                        </v-chip>
-                      </td>
-                      <td class="text-center">{{ g.confidence.toFixed(1) }}</td>
-                      <td class="text-grey-lighten-1 text-caption">{{ g.reason }}</td>
-                    </tr>
-                  </tbody>
-                </v-table>
-              </v-card-text>
-            </v-card>
+                        </span>
+                      </v-chip>
+                    </td>
+                    <td class="text-center accruvia-muted pa-2" style="font-size: 0.8rem;">
+                      {{ typeof g.confidence === 'number' ? g.confidence.toFixed(1) : g.confidence }}
+                    </td>
+                    <td class="accruvia-muted pa-2" style="font-size: 0.8rem;">{{ g.reason }}</td>
+                  </tr>
+                  <tr v-if="recentGrades.length === 0">
+                    <td colspan="5" class="text-center accruvia-muted pa-4">No grades yet</td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
           </v-col>
         </v-row>
 
-        <v-row dense class="mt-1">
-          <v-col cols="12" class="text-center">
-            <span class="text-grey text-caption">Auto-refreshes every 30s | Last updated: {{ lastUpdated }}</span>
-          </v-col>
-        </v-row>
+        <div class="text-center mt-3" style="color: #42493d; font-size: 0.7rem;">
+          Auto-refreshes every 30s | Last updated: {{ lastUpdated }}
+        </div>
       </v-container>
     </v-main>
   </v-app>
@@ -191,11 +228,44 @@
 <script src="https://cdn.jsdelivr.net/npm/vue@3.3.9/dist/vue.global.prod.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/vuetify@3.4.0/dist/vuetify.min.js"></script>
 <script>
-const { createApp } = Vue
-const { createVuetify } = Vuetify
+const { createApp } = Vue;
+const { createVuetify } = Vuetify;
+
+const vuetify = createVuetify({
+  theme: {
+    defaultTheme: 'accruvia',
+    themes: {
+      accruvia: {
+        dark: true,
+        colors: {
+          background: '#131313',
+          surface: '#1c1b1b',
+          'surface-bright': '#353535',
+          'surface-light': '#2a2a2a',
+          'surface-variant': '#42493d',
+          primary: '#9dd586',
+          'primary-darken-1': '#699e55',
+          secondary: '#335028',
+          'secondary-darken-1': '#1e3518',
+          error: '#f2726a',
+          info: '#7ac4e8',
+          success: '#9dd586',
+          warning: '#e8c76a',
+          'on-background': '#e2e3dd',
+          'on-surface': '#e2e3dd',
+        },
+      },
+    },
+  },
+  defaults: {
+    VCard: { rounded: 'sm', elevation: 0 },
+    VBtn: { rounded: 'sm', variant: 'flat' },
+    VChip: { rounded: 'sm', size: 'small' },
+  },
+});
 
 const app = createApp({
-  data() {
+  data: function() {
     return {
       loading: false,
       health: {},
@@ -204,62 +274,73 @@ const app = createApp({
       selector: { current_tier: 1, current_tier_label: 'flagship', trial_tier: null, locked: false },
       failedBackends: [],
       lastUpdated: '',
-      refreshInterval: null,
-    }
+      refreshTimer: null,
+    };
   },
   computed: {
-    summaryCards() {
-      const totalCalls = this.modelStats.reduce((s, m) => s + m.calls, 0)
-      const totalPass = this.modelStats.reduce((s, m) => s + m.pass, 0)
-      const totalFail = this.modelStats.reduce((s, m) => s + m.fail, 0)
-      const overallRate = totalCalls > 0 ? Math.round((totalPass / (totalPass + totalFail || 1)) * 100) : 0
+    summaryCards: function() {
+      var totalCalls = 0, totalPass = 0, totalFail = 0;
+      for (var i = 0; i < this.modelStats.length; i++) {
+        totalCalls += this.modelStats[i].calls || 0;
+        totalPass += this.modelStats[i].pass || 0;
+        totalFail += this.modelStats[i].fail || 0;
+      }
+      var denom = totalPass + totalFail;
+      var overallRate = denom > 0 ? Math.round((totalPass / denom) * 100) : 0;
       return [
-        { label: 'Total Calls', value: totalCalls, color: 'text-blue-lighten-2' },
-        { label: 'Models Active', value: this.health.total_models || 0, color: 'text-green-lighten-2' },
-        { label: 'Overall Pass Rate', value: overallRate + '%', color: overallRate >= 80 ? 'text-green-lighten-2' : 'text-orange-lighten-2' },
-        { label: 'Grades Recorded', value: this.recentGrades.length, color: 'text-purple-lighten-2' },
-      ]
+        { label: 'Total Calls', value: totalCalls, hex: '#7ac4e8' },
+        { label: 'Models Active', value: this.health.total_models || 0, hex: '#9dd586' },
+        { label: 'Overall Pass Rate', value: overallRate + '%', hex: overallRate >= 80 ? '#9dd586' : '#e8c76a' },
+        { label: 'Grades Recorded', value: this.recentGrades.length, hex: '#c2c9b9' },
+      ];
     },
   },
   methods: {
-    tierColor(tier) {
-      return { 1: 'blue', 2: 'purple', 3: 'teal', 4: 'orange', 5: 'grey' }[tier] || 'grey'
+    tierHex: function(tier) {
+      var map = { 1: '#335028', 2: '#3a2a5c', 3: '#2a4a4a', 4: '#5c4a1a', 5: '#353535' };
+      return map[tier] || '#353535';
     },
-    formatTime(iso) {
-      if (!iso) return ''
-      const d = new Date(iso)
-      return d.toLocaleTimeString()
-    },
-    async refresh() {
-      this.loading = true
+    formatTime: function(iso) {
+      if (!iso) return '';
       try {
-        const [healthRes, statsRes] = await Promise.all([
-          fetch('/health').then(r => r.json()),
-          fetch('/api/stats').then(r => r.json()),
-        ])
-        this.health = healthRes
-        this.modelStats = statsRes.models || []
-        this.recentGrades = statsRes.recent_grades || []
-        this.selector = statsRes.selector || this.selector
-        this.failedBackends = statsRes.failed_backends || []
-        this.lastUpdated = new Date().toLocaleTimeString()
-      } catch (e) {
-        console.error('Refresh failed:', e)
+        var d = new Date(iso);
+        return d.toLocaleTimeString();
+      } catch(e) {
+        return iso;
       }
-      this.loading = false
+    },
+    refresh: function() {
+      var self = this;
+      self.loading = true;
+      Promise.all([
+        fetch('/health').then(function(r) { return r.json(); }),
+        fetch('/api/stats').then(function(r) { return r.json(); }),
+      ]).then(function(results) {
+        self.health = results[0] || {};
+        var stats = results[1] || {};
+        self.modelStats = stats.models || [];
+        self.recentGrades = stats.recent_grades || [];
+        self.selector = stats.selector || self.selector;
+        self.failedBackends = stats.failed_backends || [];
+        self.lastUpdated = new Date().toLocaleTimeString();
+      }).catch(function(e) {
+        console.error('Refresh failed:', e);
+      }).finally(function() {
+        self.loading = false;
+      });
     },
   },
-  mounted() {
-    this.refresh()
-    this.refreshInterval = setInterval(() => this.refresh(), 30000)
+  mounted: function() {
+    this.refresh();
+    this.refreshTimer = setInterval(this.refresh, 30000);
   },
-  beforeUnmount() {
-    clearInterval(this.refreshInterval)
+  beforeUnmount: function() {
+    if (this.refreshTimer) clearInterval(this.refreshTimer);
   },
-})
+});
 
-app.use(createVuetify({ theme: { defaultTheme: 'dark' } }))
-app.mount('#app')
+app.use(vuetify);
+app.mount('#app');
 </script>
 </body>
 </html>
