@@ -203,12 +203,48 @@ def extract_user_message(body: dict[str, Any], fmt: InboundFormat) -> str:
 # Response translation  (OpenAI → original format)
 # ---------------------------------------------------------------------------
 
+def _sanitize_response(data: dict[str, Any]) -> dict[str, Any]:
+    """Strip provider-specific fields and thinking/reasoning content.
+
+    The caller should never see implementation details like thinking tokens,
+    provider_specific_fields, or vertex_ai metadata.
+    """
+    # Remove top-level provider noise
+    for key in list(data.keys()):
+        if key.startswith("vertex_ai") or key in ("provider_specific_fields", "citations"):
+            del data[key]
+
+    # Clean up choices
+    for choice in data.get("choices") or []:
+        msg = choice.get("message") or {}
+        delta = choice.get("delta") or {}
+
+        # Remove provider fields from message/delta
+        for obj in (msg, delta):
+            for key in list(obj.keys()):
+                if key in ("provider_specific_fields", "function_call", "audio"):
+                    del obj[key]
+
+        # Strip thinking/reasoning from usage details
+        usage = data.get("usage") or {}
+        details = usage.get("completion_tokens_details") or {}
+        reasoning_tokens = details.get("reasoning_tokens", 0)
+        text_tokens = details.get("text_tokens", 0)
+
+        # If model used reasoning tokens and produced no text, content may be None
+        if msg.get("content") is None and reasoning_tokens > 0:
+            msg["content"] = ""
+
+    return data
+
+
 def translate_response(
     data: dict[str, Any],
     fmt: InboundFormat,
     original_model: str,
 ) -> dict[str, Any]:
     """Translate an OpenAI-format response back to the inbound format."""
+    data = _sanitize_response(data)
     if fmt == InboundFormat.OPENAI:
         return data
     if fmt == InboundFormat.ANTHROPIC:
@@ -343,6 +379,9 @@ def translate_stream_chunk(
     state: StreamState,
 ) -> list[str]:
     """Convert one OpenAI SSE chunk to the inbound format's SSE lines."""
+    # Sanitize chunk — strip thinking tokens and provider fields
+    chunk_data = _sanitize_response(chunk_data)
+
     lines: list[str] = []
 
     if not state.started:
