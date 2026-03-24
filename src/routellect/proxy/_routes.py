@@ -664,21 +664,6 @@ class ProxyRoutes:
         """Stream an Anthropic-format response."""
         import httpx
 
-        # Pre-flight: Anthropic returns 400 for billing errors even on
-        # streaming requests, but httpx.stream() doesn't raise on non-2xx.
-        # A cheap non-streaming probe detects provider-down before we open
-        # a stream that would hang.
-        async with httpx.AsyncClient(timeout=15) as preflight_client:
-            preflight = await preflight_client.post(
-                "https://api.anthropic.com/v1/messages",
-                json={**body, "stream": False, "max_tokens": 1},
-                headers=headers,
-            )
-            if preflight.status_code >= 400:
-                error_text = preflight.text
-                if _is_provider_down(error_text):
-                    raise _ProviderDownError(f"{decision.backend}: {error_text[:200]}")
-
         collected_content: list[str] = []
         stream_usage: dict[str, int] = {"input_tokens": 0, "output_tokens": 0}
 
@@ -691,6 +676,17 @@ class ProxyRoutes:
                         json=body,
                         headers=headers,
                     ) as resp:
+                        # Check for error response (non-SSE)
+                        if resp.status_code >= 400:
+                            error_body = b""
+                            async for chunk in resp.aiter_bytes():
+                                error_body += chunk
+                                if len(error_body) > 1000:
+                                    break
+                            error_text = error_body.decode(errors="replace")
+                            if _is_provider_down(error_text):
+                                raise _ProviderDownError(f"{decision.backend}: {error_text[:200]}")
+                            return
                         async for line in resp.aiter_lines():
                             if line.startswith("data: "):
                                 try:
