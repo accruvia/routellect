@@ -157,16 +157,26 @@
                 <span class="accruvia-text font-weight-bold">Providers</span>
               </div>
               <div>
-                <v-chip v-for="(count, provider) in (health.providers || {})" :key="provider"
-                        :color="failedBackends.indexOf(provider) >= 0 ? '#5c1a1a' : '#335028'"
-                        size="small" variant="flat" class="mr-1 mb-1">
-                  <v-icon size="x-small" start
-                    :icon="failedBackends.indexOf(provider) >= 0 ? 'mdi-alert' : 'mdi-check'"
-                    :color="failedBackends.indexOf(provider) >= 0 ? '#f2726a' : '#9dd586'"></v-icon>
-                  <span :style="{ color: failedBackends.indexOf(provider) >= 0 ? '#f2726a' : '#9dd586' }">
-                    {{ provider }} ({{ count }})
+                <div v-for="(count, provider) in (health.providers || {})" :key="provider" class="d-flex align-center mb-1">
+                  <v-chip :color="failedBackends.indexOf(provider) >= 0 ? '#5c1a1a' : '#335028'"
+                          size="small" variant="flat" class="mr-2" style="min-width: 140px;">
+                    <v-icon size="x-small" start
+                      :icon="failedBackends.indexOf(provider) >= 0 ? 'mdi-alert' : 'mdi-check'"
+                      :color="failedBackends.indexOf(provider) >= 0 ? '#f2726a' : '#9dd586'"></v-icon>
+                    <span :style="{ color: failedBackends.indexOf(provider) >= 0 ? '#f2726a' : '#9dd586' }">
+                      {{ provider }} ({{ count }})
+                    </span>
+                  </v-chip>
+                  <v-btn v-if="failedBackends.indexOf(provider) >= 0"
+                         color="#1a3a5c" size="x-small" variant="flat"
+                         @click="reenableProvider(provider)">
+                    <span style="color: #7ac4e8;">Re-enable</span>
+                  </v-btn>
+                  <span v-if="providerStatus[provider] && providerStatus[provider].seconds_until_probe > 0"
+                        class="accruvia-muted ml-2" style="font-size: 0.7rem;">
+                    probe in {{ Math.round(providerStatus[provider].seconds_until_probe) }}s
                   </span>
-                </v-chip>
+                </div>
                 <div v-if="!health.providers" class="accruvia-muted" style="font-size: 0.85rem;">Loading...</div>
               </div>
             </div>
@@ -244,6 +254,7 @@
                     <th class="accruvia-muted text-left pa-2" style="font-weight: 500; font-size: 0.75rem;">Model</th>
                     <th class="accruvia-muted text-center pa-2" style="font-weight: 500; font-size: 0.75rem;">Latency</th>
                     <th class="accruvia-muted text-center pa-2" style="font-weight: 500; font-size: 0.75rem;">Tokens</th>
+                    <th class="accruvia-muted text-center pa-2" style="font-weight: 500; font-size: 0.75rem;">Est. Cost</th>
                     <th class="accruvia-muted text-left pa-2" style="font-weight: 500; font-size: 0.75rem;">Session</th>
                   </tr>
                 </thead>
@@ -255,10 +266,13 @@
                     <td class="text-center accruvia-muted pa-2" style="font-size: 0.8rem;">
                       {{ q.input_tokens > 0 ? q.input_tokens + '/' + q.output_tokens : '-' }}
                     </td>
+                    <td class="text-center pa-2" style="font-size: 0.8rem; color: #e8c76a;">
+                      {{ estimateCost(q) }}
+                    </td>
                     <td class="accruvia-muted pa-2" style="font-size: 0.75rem;">{{ q.session_id }}</td>
                   </tr>
                   <tr v-if="ungradedQueue.length === 0">
-                    <td colspan="5" class="text-center accruvia-muted pa-4">Queue empty — all calls graded</td>
+                    <td colspan="6" class="text-center accruvia-muted pa-4">Queue empty — all calls graded</td>
                   </tr>
                 </tbody>
               </table>
@@ -327,6 +341,7 @@ const app = createApp({
       togglingDemotion: false,
       gradesTab: 'graded',
       ungradedQueue: [],
+      providerStatus: {},
     };
   },
   computed: {
@@ -361,6 +376,32 @@ const app = createApp({
         return iso;
       }
     },
+    estimateCost: function(q) {
+      if (!q.input_tokens && !q.output_tokens) return '-';
+      // Per-million-token rates by provider prefix
+      var rates = {
+        'claude': { input: 3.0, output: 15.0 },
+        'gpt': { input: 2.5, output: 10.0 },
+        'gemini': { input: 1.25, output: 5.0 },
+        'llama': { input: 0.59, output: 0.79 },
+      };
+      var r = null;
+      var model = (q.model_used || '').toLowerCase();
+      for (var prefix in rates) {
+        if (model.indexOf(prefix) === 0) { r = rates[prefix]; break; }
+      }
+      if (!r) return '-';
+      var cost = ((q.input_tokens || 0) / 1000000) * r.input + ((q.output_tokens || 0) / 1000000) * r.output;
+      if (cost < 0.001) return '<$0.001';
+      return '$' + cost.toFixed(3);
+    },
+    reenableProvider: function(provider) {
+      fetch('/api/provider/reenable', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ provider: provider }),
+      }).then(function() { this.refresh(); }.bind(this));
+    },
     toggleDemotion: function() {
       var self = this;
       self.togglingDemotion = true;
@@ -386,6 +427,7 @@ const app = createApp({
         self.selector = stats.selector || self.selector;
         self.failedBackends = stats.failed_backends || [];
         self.ungradedQueue = stats.ungraded_queue || [];
+        self.providerStatus = stats.provider_status || {};
         self.lastUpdated = new Date().toLocaleTimeString();
       }).catch(function(e) {
         console.error('Refresh failed:', e);

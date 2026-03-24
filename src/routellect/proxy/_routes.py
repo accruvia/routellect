@@ -13,6 +13,7 @@ from starlette.requests import Request
 from starlette.responses import JSONResponse, StreamingResponse
 
 from routellect.protocols import ModelSelectorProtocol, RoutingDecision, RoutingOutcome
+from routellect.proxy._circuit_breaker import CircuitBreaker
 from routellect.proxy._grader import Grader
 from routellect.proxy._middleware import scrub_keys
 from routellect.proxy._provider_registry import build_model_universe
@@ -75,6 +76,7 @@ class ProxyRoutes:
         self._models = build_model_universe(credentials)
         self.selector.set_model_universe(self._models)
         self.grader = grader or Grader(credentials=credentials, selector=selector)
+        self.circuit_breaker = CircuitBreaker()
         self._session_msg_counters: dict[str, int] = {}
 
     def _get_session_id(self, request: Request, body: dict) -> str:
@@ -298,45 +300,45 @@ class ProxyRoutes:
         asyncio.create_task(self._maybe_grade_idle_sessions())
 
         user_message = self._get_last_user_message(body)
-        failed_backends: set[str] = set()
 
-        # Retry loop: if a provider fails (billing, auth, rate limit), mark
-        # that backend as failed and ask the selector for a different model.
+        # Use circuit breaker to skip known-down providers.
+        down = self.circuit_breaker.get_down_providers()
+        exclude = down if down else None
+
         for _attempt in range(3):
             decision: RoutingDecision = self.selector.select_model(
-                fingerprint, constraints={"exclude_backends": list(failed_backends)} if failed_backends else None,
+                fingerprint,
+                constraints={"exclude_backends": exclude} if exclude else None,
             )
-
-            # Skip if we already know this backend is down
-            if decision.backend in failed_backends:
-                continue
 
             start = time.monotonic()
 
             try:
                 if decision.backend == "anthropic":
-                    return await self._anthropic_passthrough(
+                    result = await self._anthropic_passthrough(
                         body, decision, start, stream, session_id, user_message,
                     )
                 else:
-                    return await self._cross_provider_request(
+                    result = await self._cross_provider_request(
                         body, decision, start, stream, session_id, user_message,
                         messages, system, fingerprint,
                     )
+                self.circuit_breaker.record_success(decision.backend)
+                return result
             except _ProviderDownError as exc:
                 elapsed_ms = int((time.monotonic() - start) * 1000)
                 self.selector.record_outcome(
                     decision,
                     RoutingOutcome(success=False, latency_ms=elapsed_ms, failure_kind="provider_down"),
                 )
-                failed_backends.add(decision.backend)
+                self.circuit_breaker.record_failure(decision.backend)
+                exclude = self.circuit_breaker.get_down_providers()
                 logger.warning(
                     "Provider %s is down (%s), failing over...",
                     decision.backend, exc,
                 )
                 continue
 
-        # All providers failed
         return JSONResponse(
             {"type": "error", "error": {"type": "api_error", "message": "All providers failed. Check API keys and billing."}},
             status_code=502,
@@ -637,10 +639,11 @@ class ProxyRoutes:
         """Stream an Anthropic-format response."""
         import httpx
 
-        # Pre-flight: check for provider-down errors before streaming.
-        # Anthropic returns 400 for billing errors even on streaming requests,
-        # but the stream body is just JSON (not SSE), so we'd hang.
-        async with httpx.AsyncClient(timeout=120) as preflight_client:
+        # Pre-flight: Anthropic returns 400 for billing errors even on
+        # streaming requests, but httpx.stream() doesn't raise on non-2xx.
+        # A cheap non-streaming probe detects provider-down before we open
+        # a stream that would hang.
+        async with httpx.AsyncClient(timeout=15) as preflight_client:
             preflight = await preflight_client.post(
                 "https://api.anthropic.com/v1/messages",
                 json={**body, "stream": False, "max_tokens": 1},
@@ -735,6 +738,15 @@ class ProxyRoutes:
             "providers": providers,
             "total_models": len(self._models),
         })
+
+    async def api_provider_reenable(self, request: Request) -> JSONResponse:
+        """POST /api/provider/reenable — manually re-enable a downed provider."""
+        body = await request.json()
+        provider = body.get("provider", "")
+        if not provider:
+            return JSONResponse({"error": "provider is required"}, status_code=400)
+        self.circuit_breaker.re_enable(provider)
+        return JSONResponse({"provider": provider, "status": "re-enabled"})
 
     async def api_selector_toggle(self, request: Request) -> JSONResponse:
         """POST /api/selector/toggle — toggle demotion lock."""
@@ -843,6 +855,7 @@ class ProxyRoutes:
             "models": models,
             "recent_grades": recent,
             "selector": sel_state,
-            "failed_backends": [],
+            "failed_backends": self.circuit_breaker.get_down_providers(),
+            "provider_status": self.circuit_breaker.get_status(),
             "ungraded_queue": ungraded,
         })
