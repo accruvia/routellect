@@ -51,6 +51,7 @@ def create_app(
             Route("/", _dashboard, methods=["GET"]),
             Route("/dashboard", _dashboard, methods=["GET"]),
             Route("/api/stats", routes.api_stats, methods=["GET"]),
+            Route("/api/selector/toggle", routes.api_selector_toggle, methods=["POST"]),
             Route("/v1/chat/completions", routes.chat_completions, methods=["POST"]),
             Route("/v1/messages", routes.anthropic_messages, methods=["POST"]),
             Route("/v1/models", routes.list_models, methods=["GET"]),

@@ -141,11 +141,12 @@
               </div>
               <div class="d-flex justify-space-between align-center">
                 <span class="accruvia-muted" style="font-size: 0.85rem;">Demotion</span>
-                <v-chip :color="selector.locked ? '#5c1a1a' : '#335028'" size="small" variant="flat">
+                <v-btn :color="selector.locked ? '#5c1a1a' : '#335028'" size="small" variant="flat"
+                       @click="toggleDemotion" :loading="togglingDemotion" style="min-width: 80px;">
                   <span :style="{ color: selector.locked ? '#f2726a' : '#9dd586' }">
                     {{ selector.locked ? 'Locked' : 'Active' }}
                   </span>
-                </v-chip>
+                </v-btn>
               </div>
             </div>
 
@@ -275,6 +276,7 @@ const app = createApp({
       failedBackends: [],
       lastUpdated: '',
       refreshTimer: null,
+      togglingDemotion: false,
     };
   },
   computed: {
@@ -308,6 +310,17 @@ const app = createApp({
       } catch(e) {
         return iso;
       }
+    },
+    toggleDemotion: function() {
+      var self = this;
+      self.togglingDemotion = true;
+      fetch('/api/selector/toggle', { method: 'POST' })
+        .then(function(r) { return r.json(); })
+        .then(function(data) {
+          self.selector.locked = data.locked;
+        })
+        .catch(function(e) { console.error('Toggle failed:', e); })
+        .finally(function() { self.togglingDemotion = false; });
     },
     refresh: function() {
       var self = this;

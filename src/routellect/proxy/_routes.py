@@ -736,6 +736,14 @@ class ProxyRoutes:
             "total_models": len(self._models),
         })
 
+    async def api_selector_toggle(self, request: Request) -> JSONResponse:
+        """POST /api/selector/toggle — toggle demotion lock."""
+        self.selector.locked = not self.selector.locked
+        return JSONResponse({
+            "locked": self.selector.locked,
+            "current_tier": getattr(self.selector, "current_tier", 1),
+        })
+
     async def api_stats(self, request: Request) -> JSONResponse:
         """GET /api/stats — model performance data for the dashboard."""
         from routellect.proxy._grades_db import query_model_stats, query_recent_grades
