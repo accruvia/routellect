@@ -307,7 +307,7 @@ class ProxyRoutes:
                 provider=decision.backend,
                 model_id=decision.model_id,
                 messages=openai_messages,
-                stream=False,
+                stream=stream,
                 credentials=self.credentials,
                 **fwd_kwargs,
             )
@@ -321,6 +321,11 @@ class ProxyRoutes:
             return JSONResponse(
                 {"type": "error", "error": {"type": "api_error", "message": message}},
                 status_code=502,
+            )
+
+        if stream:
+            return await self._cross_provider_stream(
+                response, decision, start, session_id, user_message,
             )
 
         elapsed_ms = int((time.monotonic() - start) * 1000)
@@ -376,6 +381,76 @@ class ProxyRoutes:
             "x-routellect-routed": "true",
         }
         return JSONResponse(anthropic_response, headers=headers)
+
+    async def _cross_provider_stream(
+        self,
+        response: Any,
+        decision: RoutingDecision,
+        start: float,
+        session_id: str,
+        user_message: str,
+    ) -> StreamingResponse:
+        """Stream a cross-provider response, translating OpenAI SSE to Anthropic SSE."""
+        collected_content: list[str] = []
+        msg_id = f"msg_{uuid.uuid4().hex[:24]}"
+        input_tokens = 0
+        output_tokens = 0
+
+        async def event_generator():
+            nonlocal input_tokens, output_tokens
+            # Emit Anthropic message_start
+            yield f"event: message_start\ndata: {json.dumps({'type': 'message_start', 'message': {'id': msg_id, 'type': 'message', 'role': 'assistant', 'model': decision.model_id, 'content': [], 'stop_reason': None, 'stop_sequence': None, 'usage': {'input_tokens': 0, 'output_tokens': 0}}})}\n\n"
+            yield f"event: content_block_start\ndata: {json.dumps({'type': 'content_block_start', 'index': 0, 'content_block': {'type': 'text', 'text': ''}})}\n\n"
+
+            try:
+                async for chunk in response:
+                    data = chunk.model_dump() if hasattr(chunk, "model_dump") else chunk
+                    choices = data.get("choices") or []
+                    if choices:
+                        delta = (choices[0].get("delta") or {})
+                        text = delta.get("content") or ""
+                        if text:
+                            collected_content.append(text)
+                            yield f"event: content_block_delta\ndata: {json.dumps({'type': 'content_block_delta', 'index': 0, 'delta': {'type': 'text_delta', 'text': text}})}\n\n"
+                    usage = data.get("usage") or {}
+                    if usage.get("prompt_tokens"):
+                        input_tokens = usage["prompt_tokens"]
+                    if usage.get("completion_tokens"):
+                        output_tokens = usage["completion_tokens"]
+            finally:
+                yield f"event: content_block_stop\ndata: {json.dumps({'type': 'content_block_stop', 'index': 0})}\n\n"
+                yield f"event: message_delta\ndata: {json.dumps({'type': 'message_delta', 'delta': {'stop_reason': 'end_turn', 'stop_sequence': None}, 'usage': {'output_tokens': output_tokens}})}\n\n"
+                yield f"event: message_stop\ndata: {json.dumps({'type': 'message_stop'})}\n\n"
+
+                elapsed_ms = int((time.monotonic() - start) * 1000)
+                self.selector.record_outcome(
+                    decision,
+                    RoutingOutcome(
+                        success=True,
+                        latency_ms=elapsed_ms,
+                        input_tokens=input_tokens,
+                        output_tokens=output_tokens,
+                    ),
+                )
+                msg_idx = self._session_msg_counters.get(session_id, 0)
+                self._session_msg_counters[session_id] = msg_idx + 1
+                self.grader.record_exchange(
+                    session_id=session_id,
+                    message_index=msg_idx,
+                    user_message=user_message,
+                    assistant_response="".join(collected_content)[:2000],
+                    decision=decision,
+                    latency_ms=elapsed_ms,
+                    input_tokens=input_tokens,
+                    output_tokens=output_tokens,
+                )
+
+        resp_headers = {
+            "x-routellect-model": decision.model_id,
+            "x-routellect-routed": "true",
+            "content-type": "text/event-stream",
+        }
+        return StreamingResponse(event_generator(), media_type="text/event-stream", headers=resp_headers)
 
     async def _anthropic_passthrough(
         self,
