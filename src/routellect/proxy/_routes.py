@@ -486,6 +486,7 @@ class ProxyRoutes:
         import httpx
 
         collected_content: list[str] = []
+        stream_usage: dict[str, int] = {"input_tokens": 0, "output_tokens": 0}
 
         async def event_generator():
             try:
@@ -501,9 +502,15 @@ class ProxyRoutes:
                                 try:
                                     chunk = json.loads(line[6:])
                                     if chunk.get("type") == "content_block_delta":
-                                        delta_text = chunk.get("delta", {}).get("text", "")
+                                        delta_text = (chunk.get("delta") or {}).get("text", "")
                                         if delta_text:
                                             collected_content.append(delta_text)
+                                    elif chunk.get("type") == "message_start":
+                                        msg_usage = (chunk.get("message") or {}).get("usage") or {}
+                                        stream_usage["input_tokens"] = msg_usage.get("input_tokens", 0)
+                                    elif chunk.get("type") == "message_delta":
+                                        delta_usage = chunk.get("usage") or {}
+                                        stream_usage["output_tokens"] = delta_usage.get("output_tokens", 0)
                                 except json.JSONDecodeError:
                                     pass
                             yield line + "\n"
@@ -511,7 +518,12 @@ class ProxyRoutes:
                 elapsed_ms = int((time.monotonic() - start) * 1000)
                 self.selector.record_outcome(
                     decision,
-                    RoutingOutcome(success=True, latency_ms=elapsed_ms),
+                    RoutingOutcome(
+                        success=True,
+                        latency_ms=elapsed_ms,
+                        input_tokens=stream_usage["input_tokens"],
+                        output_tokens=stream_usage["output_tokens"],
+                    ),
                 )
                 msg_idx = self._session_msg_counters.get(session_id, 0)
                 self._session_msg_counters[session_id] = msg_idx + 1
@@ -522,6 +534,8 @@ class ProxyRoutes:
                     assistant_response="".join(collected_content)[:2000],
                     decision=decision,
                     latency_ms=elapsed_ms,
+                    input_tokens=stream_usage["input_tokens"],
+                    output_tokens=stream_usage["output_tokens"],
                 )
 
         resp_headers = {
