@@ -115,12 +115,18 @@ class GraduatedDemotionSelector:
             return self._available_tiers[idx + 1]
         return None
 
-    def _pick_from_tier(self, tier: int) -> ModelCapability:
-        """Pick a model from the given tier (random within tier)."""
+    def _pick_from_tier(self, tier: int, exclude_backends: list[str] | None = None) -> ModelCapability | None:
+        """Pick a model from the given tier (random within tier).
+
+        Returns None if all candidates are excluded.
+        """
         candidates = self._tier_models.get(tier, [])
         if not candidates:
-            # Fallback to current tier
             candidates = self._tier_models.get(self.current_tier, self._models)
+        if exclude_backends:
+            candidates = [m for m in candidates if m.backend not in exclude_backends]
+        if not candidates:
+            return None
         return random.choice(candidates)
 
     def select_model(
@@ -133,27 +139,48 @@ class GraduatedDemotionSelector:
                 "No models available. Run setup first: python -m routellect.proxy --setup"
             )
 
+        exclude_backends: list[str] = []
+        if constraints and constraints.get("exclude_backends"):
+            exclude_backends = constraints["exclude_backends"]
+
+        def _pick_any_available() -> ModelCapability | None:
+            """Try every tier to find a model not in an excluded backend."""
+            for t in self._available_tiers:
+                chosen = self._pick_from_tier(t, exclude_backends=exclude_backends)
+                if chosen is not None:
+                    return chosen
+            return None
+
         # If locked or no next tier, serve from current tier.
         if self.locked or self._next_tier() is None:
-            chosen = self._pick_from_tier(self.current_tier)
+            chosen = self._pick_from_tier(self.current_tier, exclude_backends=exclude_backends)
+            if chosen is None:
+                chosen = _pick_any_available()
+            if chosen is None:
+                raise RuntimeError("All providers are down.")
             return RoutingDecision(
                 model_id=chosen.model_id,
                 backend=chosen.backend,
                 confidence=0.9,
                 reasoning=f"tier {self.current_tier} ({TIER_LABELS.get(self.current_tier, '?')})"
-                + (" [locked]" if self.locked else ""),
+                + (" [locked]" if self.locked else "")
+                + (" [failover]" if exclude_backends else ""),
             )
 
         # Check if current tier has enough data to start trialing.
         current_stats = self._tier_stats[self.current_tier]
         if current_stats.total < MIN_GRADES_BEFORE_DEMOTION:
-            # Not enough data yet — stay on current tier to build confidence.
-            chosen = self._pick_from_tier(self.current_tier)
+            chosen = self._pick_from_tier(self.current_tier, exclude_backends=exclude_backends)
+            if chosen is None:
+                chosen = _pick_any_available()
+            if chosen is None:
+                raise RuntimeError("All providers are down.")
             return RoutingDecision(
                 model_id=chosen.model_id,
                 backend=chosen.backend,
                 confidence=0.8,
-                reasoning=f"tier {self.current_tier} (building confidence: {current_stats.total}/{MIN_GRADES_BEFORE_DEMOTION})",
+                reasoning=f"tier {self.current_tier} (building confidence: {current_stats.total}/{MIN_GRADES_BEFORE_DEMOTION})"
+                + (" [failover]" if exclude_backends else ""),
             )
 
         # Current tier has enough data and passes the floor — trial next tier.
@@ -170,22 +197,28 @@ class GraduatedDemotionSelector:
 
         # Send TRIAL_RATE of requests to the trial tier.
         if self.trial_tier is not None and random.random() < TRIAL_RATE:
-            chosen = self._pick_from_tier(self.trial_tier)
-            return RoutingDecision(
-                model_id=chosen.model_id,
-                backend=chosen.backend,
-                confidence=0.5,
-                reasoning=f"trial tier {self.trial_tier} ({TIER_LABELS.get(self.trial_tier, '?')})",
-                is_exploration=True,
-            )
+            chosen = self._pick_from_tier(self.trial_tier, exclude_backends=exclude_backends)
+            if chosen is not None:
+                return RoutingDecision(
+                    model_id=chosen.model_id,
+                    backend=chosen.backend,
+                    confidence=0.5,
+                    reasoning=f"trial tier {self.trial_tier} ({TIER_LABELS.get(self.trial_tier, '?')})",
+                    is_exploration=True,
+                )
 
         # Default: serve from current tier.
-        chosen = self._pick_from_tier(self.current_tier)
+        chosen = self._pick_from_tier(self.current_tier, exclude_backends=exclude_backends)
+        if chosen is None:
+            chosen = _pick_any_available()
+        if chosen is None:
+            raise RuntimeError("All providers are down.")
         return RoutingDecision(
             model_id=chosen.model_id,
             backend=chosen.backend,
             confidence=0.85,
-            reasoning=f"tier {self.current_tier} ({TIER_LABELS.get(self.current_tier, '?')})",
+            reasoning=f"tier {self.current_tier} ({TIER_LABELS.get(self.current_tier, '?')})"
+            + (" [failover]" if exclude_backends else ""),
         )
 
     def record_outcome(

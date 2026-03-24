@@ -153,3 +153,65 @@ class TestGraduatedDemotionSelector:
 
         # Tier stats should be empty
         assert sel._tier_stats[1].total == 0
+
+    def test_failover_excludes_backend(self):
+        """When a backend is excluded, selector picks from another backend."""
+        sel = GraduatedDemotionSelector()
+        sel.set_model_universe(_make_models())
+
+        # Exclude anthropic — should get openai or google
+        for _ in range(20):
+            d = sel.select_model(
+                {"message_count": 1},
+                constraints={"exclude_backends": ["anthropic"]},
+            )
+            assert d.backend != "anthropic"
+            assert "failover" in d.reasoning
+
+    def test_failover_excludes_multiple_backends(self):
+        """When multiple backends are excluded, selector finds remaining."""
+        sel = GraduatedDemotionSelector()
+        sel.set_model_universe(_make_models())
+
+        # Exclude anthropic — only openai left in our test models
+        for _ in range(20):
+            d = sel.select_model(
+                {"message_count": 1},
+                constraints={"exclude_backends": ["anthropic"]},
+            )
+            assert d.backend == "openai"
+
+    def test_failover_all_excluded_raises(self):
+        """When all backends are excluded, raises RuntimeError."""
+        sel = GraduatedDemotionSelector()
+        sel.set_model_universe(_make_models())
+
+        import pytest
+        with pytest.raises(RuntimeError, match="All providers are down"):
+            sel.select_model(
+                {"message_count": 1},
+                constraints={"exclude_backends": ["anthropic", "openai", "google"]},
+            )
+
+    def test_failover_works_when_locked(self):
+        """Even when locked at a tier, failover should find another backend."""
+        sel = GraduatedDemotionSelector()
+        sel.set_model_universe(_make_models())
+        sel.locked = True
+
+        # Exclude anthropic — should still find openai
+        d = sel.select_model(
+            {"message_count": 1},
+            constraints={"exclude_backends": ["anthropic"]},
+        )
+        assert d.backend != "anthropic"
+        assert "failover" in d.reasoning
+
+    def test_no_constraints_works_normally(self):
+        """Without constraints, selector works as before."""
+        sel = GraduatedDemotionSelector()
+        sel.set_model_universe(_make_models())
+
+        d = sel.select_model({"message_count": 1})
+        assert d.model_id in {"claude-opus-4-6", "claude-sonnet-4-6"}
+        assert "failover" not in d.reasoning

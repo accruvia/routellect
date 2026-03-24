@@ -20,6 +20,30 @@ from routellect.proxy._translation import forward_completion
 
 logger = logging.getLogger("routellect.proxy")
 
+# Patterns that indicate a provider is down (not a transient error).
+_PROVIDER_DOWN_PATTERNS = [
+    "credit balance is too low",
+    "billing",
+    "payment required",
+    "quota exceeded",
+    "rate limit",
+    "authentication_error",
+    "invalid_api_key",
+    "invalid bearer token",
+    "account deactivated",
+]
+
+
+class _ProviderDownError(Exception):
+    """Raised when a provider rejects a request due to billing, auth, or quota."""
+    pass
+
+
+def _is_provider_down(error_text: str) -> bool:
+    """Check if an error indicates the provider is down (not transient)."""
+    lower = error_text.lower()
+    return any(p in lower for p in _PROVIDER_DOWN_PATTERNS)
+
 
 def _build_task_fingerprint(body: dict[str, Any]) -> dict[str, Any]:
     """Extract non-sensitive features from the request for routing decisions.
@@ -273,18 +297,64 @@ class ProxyRoutes:
 
         asyncio.create_task(self._maybe_grade_idle_sessions())
 
-        decision: RoutingDecision = self.selector.select_model(fingerprint)
         user_message = self._get_last_user_message(body)
-        start = time.monotonic()
+        failed_backends: set[str] = set()
 
-        # If routing to an Anthropic model, pass through directly via httpx
-        # to preserve the native Anthropic request format exactly.
-        if decision.backend == "anthropic":
-            return await self._anthropic_passthrough(
-                body, decision, start, stream, session_id, user_message,
+        # Retry loop: if a provider fails (billing, auth, rate limit), mark
+        # that backend as failed and ask the selector for a different model.
+        for _attempt in range(3):
+            decision: RoutingDecision = self.selector.select_model(
+                fingerprint, constraints={"exclude_backends": list(failed_backends)} if failed_backends else None,
             )
 
-        # Cross-provider: convert Anthropic format to OpenAI via litellm
+            # Skip if we already know this backend is down
+            if decision.backend in failed_backends:
+                continue
+
+            start = time.monotonic()
+
+            try:
+                if decision.backend == "anthropic":
+                    return await self._anthropic_passthrough(
+                        body, decision, start, stream, session_id, user_message,
+                    )
+                else:
+                    return await self._cross_provider_request(
+                        body, decision, start, stream, session_id, user_message,
+                        messages, system, fingerprint,
+                    )
+            except _ProviderDownError as exc:
+                elapsed_ms = int((time.monotonic() - start) * 1000)
+                self.selector.record_outcome(
+                    decision,
+                    RoutingOutcome(success=False, latency_ms=elapsed_ms, failure_kind="provider_down"),
+                )
+                failed_backends.add(decision.backend)
+                logger.warning(
+                    "Provider %s is down (%s), failing over...",
+                    decision.backend, exc,
+                )
+                continue
+
+        # All providers failed
+        return JSONResponse(
+            {"type": "error", "error": {"type": "api_error", "message": "All providers failed. Check API keys and billing."}},
+            status_code=502,
+        )
+
+    async def _cross_provider_request(
+        self,
+        body: dict[str, Any],
+        decision: RoutingDecision,
+        start: float,
+        stream: bool,
+        session_id: str,
+        user_message: str,
+        messages: list,
+        system: Any,
+        fingerprint: dict,
+    ) -> Any:
+        """Route an Anthropic-format request to a non-Anthropic provider via litellm."""
         openai_messages = []
         if system:
             sys_text = system if isinstance(system, str) else json.dumps(system)
@@ -292,7 +362,6 @@ class ProxyRoutes:
         for msg in messages:
             content = msg.get("content", "")
             if isinstance(content, list):
-                # Anthropic content blocks → extract text
                 parts = [b.get("text", "") for b in content if b.get("type") == "text"]
                 content = "\n".join(parts)
             openai_messages.append({"role": msg.get("role", "user"), "content": content})
@@ -312,12 +381,15 @@ class ProxyRoutes:
                 **fwd_kwargs,
             )
         except Exception as exc:
+            error_msg = str(exc)
+            if _is_provider_down(error_msg):
+                raise _ProviderDownError(f"{decision.backend}: {error_msg[:200]}")
             elapsed_ms = int((time.monotonic() - start) * 1000)
             self.selector.record_outcome(
                 decision,
                 RoutingOutcome(success=False, latency_ms=elapsed_ms, failure_kind="provider_error"),
             )
-            message = scrub_keys(str(exc))
+            message = scrub_keys(error_msg)
             return JSONResponse(
                 {"type": "error", "error": {"type": "api_error", "message": message}},
                 status_code=502,
@@ -332,7 +404,6 @@ class ProxyRoutes:
         data = response.model_dump() if hasattr(response, "model_dump") else response
         usage = data.get("usage", {})
 
-        # Convert OpenAI response back to Anthropic format
         content_text = ""
         choices = data.get("choices") or []
         if choices:
@@ -488,12 +559,15 @@ class ProxyRoutes:
                     headers=headers,
                 )
         except Exception as exc:
+            error_msg = str(exc)
+            if _is_provider_down(error_msg):
+                raise _ProviderDownError(f"{decision.backend}: {error_msg[:200]}")
             elapsed_ms = int((time.monotonic() - start) * 1000)
             self.selector.record_outcome(
                 decision,
                 RoutingOutcome(success=False, latency_ms=elapsed_ms, failure_kind="provider_error"),
             )
-            message = scrub_keys(str(exc))
+            message = scrub_keys(error_msg)
             return JSONResponse(
                 {"type": "error", "error": {"type": "api_error", "message": message}},
                 status_code=502,
@@ -503,6 +577,9 @@ class ProxyRoutes:
         data = resp.json()
 
         if resp.status_code >= 400:
+            error_text = json.dumps(data)
+            if _is_provider_down(error_text):
+                raise _ProviderDownError(f"{decision.backend}: {error_text[:200]}")
             self.selector.record_outcome(
                 decision,
                 RoutingOutcome(success=False, latency_ms=elapsed_ms, failure_kind="provider_error"),
