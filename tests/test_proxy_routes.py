@@ -194,7 +194,7 @@ class TestKeyScrubbing:
 
 class TestTaskFingerprint:
     def test_fingerprint_does_not_include_content(self):
-        from routellect.proxy._routes import _build_task_fingerprint
+        from routellect.proxy._formats import InboundFormat, build_task_fingerprint, normalize_to_openai
 
         body = {
             "model": "gpt-4o",
@@ -205,7 +205,8 @@ class TestTaskFingerprint:
             "tools": [{"type": "function", "function": {"name": "get_weather"}}],
             "stream": True,
         }
-        fp = _build_task_fingerprint(body)
+        req = normalize_to_openai(body, InboundFormat.OPENAI)
+        fp = build_task_fingerprint(req)
         fp_str = str(fp)
         assert "SECRET" not in fp_str
         assert fp["message_count"] == 2
