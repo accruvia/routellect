@@ -86,7 +86,7 @@ def main() -> None:
     )
 
     parser = argparse.ArgumentParser(
-        prog="routellect-proxy",
+        prog="routellect",
         description="Routellect LLM proxy — transparent model routing",
     )
     parser.add_argument("--setup", action="store_true", help="Re-run the credential setup wizard")

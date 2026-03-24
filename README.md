@@ -130,7 +130,7 @@ python -m routellect.proxy --export
 python -m routellect.proxy --export my-data.zip
 ```
 
-The `routellect-proxy` command is also available as a script entry point after installation.
+The `routellect` command is also available as a script entry point after installation.
 
 ## Proxy Endpoints
 

@@ -26,8 +26,8 @@ dev = [
 ]
 
 [project.scripts]
-routellect = "routellect.runner:main"
-routellect-proxy = "routellect.proxy:main"
+routellect = "routellect.proxy:main"
+routellect-runner = "routellect.runner:main"
 
 [tool.setuptools]
 package-dir = {"" = "src"}
