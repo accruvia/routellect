@@ -276,7 +276,8 @@ class Grader:
         raw_content = ""
         choices = data.get("choices", [])
         if choices:
-            raw_content = choices[0].get("message", {}).get("content", "")
+            msg = choices[0].get("message") or {}
+            raw_content = msg.get("content") or ""
 
         # Estimate grading cost (haiku rates)
         input_tokens = usage.get("prompt_tokens", 0)

@@ -223,7 +223,8 @@ class ProxyRoutes:
         assistant_content = ""
         choices = data.get("choices", [])
         if choices:
-            assistant_content = choices[0].get("message", {}).get("content", "")
+            msg = choices[0].get("message") or {}
+            assistant_content = msg.get("content") or ""
 
         msg_idx = self._session_msg_counters.get(session_id, 0)
         self._session_msg_counters[session_id] = msg_idx + 1
@@ -328,9 +329,10 @@ class ProxyRoutes:
 
         # Convert OpenAI response back to Anthropic format
         content_text = ""
-        choices = data.get("choices", [])
+        choices = data.get("choices") or []
         if choices:
-            content_text = choices[0].get("message", {}).get("content", "")
+            msg = choices[0].get("message") or {}
+            content_text = msg.get("content") or ""
 
         anthropic_response = {
             "id": data.get("id", f"msg_{uuid.uuid4().hex[:24]}"),
