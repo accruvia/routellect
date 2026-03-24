@@ -173,15 +173,36 @@
           </v-col>
         </v-row>
 
-        <!-- Recent Grades -->
+        <!-- Grades Tabs -->
         <v-row dense class="mt-3">
           <v-col cols="12">
             <div class="accruvia-card pa-4">
-              <div class="d-flex align-center mb-3">
-                <v-icon size="small" color="#9dd586" class="mr-2">mdi-clipboard-check</v-icon>
-                <span class="accruvia-text font-weight-bold">Recent Grades</span>
+              <div class="d-flex align-center mb-1">
+                <v-btn variant="text" size="small" @click="gradesTab = 'graded'"
+                       :style="{ color: gradesTab === 'graded' ? '#9dd586' : '#c2c9b9',
+                                 borderBottom: gradesTab === 'graded' ? '2px solid #9dd586' : '2px solid transparent' }"
+                       class="mr-2" style="border-radius: 0; min-width: auto; padding: 4px 12px;">
+                  <v-icon size="small" class="mr-1">mdi-clipboard-check</v-icon>
+                  Recent Grades
+                  <v-chip v-if="recentGrades.length" color="#335028" size="x-small" variant="flat" class="ml-2">
+                    <span style="color: #9dd586;">{{ recentGrades.length }}</span>
+                  </v-chip>
+                </v-btn>
+                <v-btn variant="text" size="small" @click="gradesTab = 'queue'"
+                       :style="{ color: gradesTab === 'queue' ? '#7ac4e8' : '#c2c9b9',
+                                 borderBottom: gradesTab === 'queue' ? '2px solid #7ac4e8' : '2px solid transparent' }"
+                       style="border-radius: 0; min-width: auto; padding: 4px 12px;">
+                  <v-icon size="small" class="mr-1">mdi-clock-outline</v-icon>
+                  Ungraded Queue
+                  <v-chip v-if="ungradedQueue.length" color="#1a3a5c" size="x-small" variant="flat" class="ml-2">
+                    <span style="color: #7ac4e8;">{{ ungradedQueue.length }}</span>
+                  </v-chip>
+                </v-btn>
               </div>
-              <table style="width: 100%; border-collapse: collapse;">
+              <div style="border-top: 1px solid #353535; margin-bottom: 12px;"></div>
+
+              <!-- Graded Tab -->
+              <table v-if="gradesTab === 'graded'" style="width: 100%; border-collapse: collapse;">
                 <thead>
                   <tr style="border-bottom: 1px solid #353535;">
                     <th class="accruvia-muted text-left pa-2" style="font-weight: 500; font-size: 0.75rem;">Time</th>
@@ -214,12 +235,39 @@
                   </tr>
                 </tbody>
               </table>
+
+              <!-- Ungraded Queue Tab -->
+              <table v-if="gradesTab === 'queue'" style="width: 100%; border-collapse: collapse;">
+                <thead>
+                  <tr style="border-bottom: 1px solid #353535;">
+                    <th class="accruvia-muted text-left pa-2" style="font-weight: 500; font-size: 0.75rem;">Time</th>
+                    <th class="accruvia-muted text-left pa-2" style="font-weight: 500; font-size: 0.75rem;">Model</th>
+                    <th class="accruvia-muted text-center pa-2" style="font-weight: 500; font-size: 0.75rem;">Latency</th>
+                    <th class="accruvia-muted text-center pa-2" style="font-weight: 500; font-size: 0.75rem;">Tokens</th>
+                    <th class="accruvia-muted text-left pa-2" style="font-weight: 500; font-size: 0.75rem;">Session</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr v-for="(q, i) in ungradedQueue" :key="i" style="border-bottom: 1px solid #1c1b1b;">
+                    <td class="accruvia-muted pa-2" style="font-size: 0.8rem;">{{ formatTime(q.timestamp) }}</td>
+                    <td class="accruvia-text pa-2" style="font-size: 0.85rem;">{{ q.model_used }}</td>
+                    <td class="text-center accruvia-muted pa-2" style="font-size: 0.8rem;">{{ q.latency_ms }}ms</td>
+                    <td class="text-center accruvia-muted pa-2" style="font-size: 0.8rem;">
+                      {{ q.input_tokens > 0 ? q.input_tokens + '/' + q.output_tokens : '-' }}
+                    </td>
+                    <td class="accruvia-muted pa-2" style="font-size: 0.75rem;">{{ q.session_id }}</td>
+                  </tr>
+                  <tr v-if="ungradedQueue.length === 0">
+                    <td colspan="5" class="text-center accruvia-muted pa-4">Queue empty — all calls graded</td>
+                  </tr>
+                </tbody>
+              </table>
             </div>
           </v-col>
         </v-row>
 
         <div class="text-center mt-3" style="color: #42493d; font-size: 0.7rem;">
-          Auto-refreshes every 30s | Last updated: {{ lastUpdated }}
+          Auto-refreshes every 15s | Last updated: {{ lastUpdated }}
         </div>
       </v-container>
     </v-main>
@@ -277,6 +325,8 @@ const app = createApp({
       lastUpdated: '',
       refreshTimer: null,
       togglingDemotion: false,
+      gradesTab: 'graded',
+      ungradedQueue: [],
     };
   },
   computed: {
@@ -335,6 +385,7 @@ const app = createApp({
         self.recentGrades = stats.recent_grades || [];
         self.selector = stats.selector || self.selector;
         self.failedBackends = stats.failed_backends || [];
+        self.ungradedQueue = stats.ungraded_queue || [];
         self.lastUpdated = new Date().toLocaleTimeString();
       }).catch(function(e) {
         console.error('Refresh failed:', e);
@@ -345,7 +396,7 @@ const app = createApp({
   },
   mounted: function() {
     this.refresh();
-    this.refreshTimer = setInterval(this.refresh, 30000);
+    this.refreshTimer = setInterval(this.refresh, 15000);
   },
   beforeUnmount: function() {
     if (this.refreshTimer) clearInterval(this.refreshTimer);

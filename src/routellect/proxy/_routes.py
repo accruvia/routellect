@@ -819,9 +819,30 @@ class ProxyRoutes:
 
         recent = query_recent_grades(limit=20)
 
+        # Ungraded queue: recent routing_log entries that have no matching grade
+        ungraded = []
+        conn2 = _get_db()
+        try:
+            ungraded_rows = conn2.execute(
+                """SELECT r.session_id, r.model_used, r.latency_ms, r.input_tokens,
+                          r.output_tokens, r.timestamp
+                   FROM routing_log r
+                   LEFT JOIN grades g ON r.session_id = g.session_id
+                                     AND r.message_index = g.message_index
+                   WHERE g.id IS NULL
+                   ORDER BY r.timestamp DESC
+                   LIMIT 30"""
+            ).fetchall()
+            ungraded = [dict(r) for r in ungraded_rows]
+        except Exception:
+            pass
+        finally:
+            conn2.close()
+
         return JSONResponse({
             "models": models,
             "recent_grades": recent,
             "selector": sel_state,
             "failed_backends": [],
+            "ungraded_queue": ungraded,
         })
