@@ -56,6 +56,10 @@ async def forward_completion(
 
     litellm_model = litellm_model_name(provider, model_id)
 
+    # Request usage data in streaming responses so we can capture token counts.
+    if stream:
+        kwargs.setdefault("stream_options", {"include_usage": True})
+
     response = await litellm.acompletion(
         model=litellm_model,
         messages=messages,
