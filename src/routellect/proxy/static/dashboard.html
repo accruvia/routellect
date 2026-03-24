@@ -1,0 +1,265 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>Routellect Dashboard</title>
+  <link href="https://cdn.jsdelivr.net/npm/vuetify@3.4.0/dist/vuetify.min.css" rel="stylesheet">
+  <link href="https://cdn.jsdelivr.net/npm/@mdi/font@7.3.67/css/materialdesignicons.min.css" rel="stylesheet">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+</head>
+<body>
+<div id="app">
+  <v-app theme="dark">
+    <v-app-bar color="grey-darken-4" density="compact">
+      <v-app-bar-title>
+        <span class="text-blue-lighten-2 font-weight-bold">routellect</span>
+        <span class="text-grey-lighten-1 ml-2 text-body-2">model routing dashboard</span>
+      </v-app-bar-title>
+      <template v-slot:append>
+        <v-chip :color="health.status === 'ok' ? 'green' : 'red'" size="small" variant="flat" class="mr-2">
+          {{ health.total_models || 0 }} models
+        </v-chip>
+        <v-btn icon="mdi-refresh" size="small" @click="refresh" :loading="loading"></v-btn>
+      </template>
+    </v-app-bar>
+
+    <v-main class="bg-grey-darken-4">
+      <v-container fluid>
+        <!-- Status Cards -->
+        <v-row dense>
+          <v-col cols="12" md="3" v-for="stat in summaryCards" :key="stat.label">
+            <v-card color="grey-darken-3" variant="flat">
+              <v-card-text class="text-center">
+                <div class="text-h4 font-weight-bold" :class="stat.color">{{ stat.value }}</div>
+                <div class="text-grey-lighten-1 text-caption mt-1">{{ stat.label }}</div>
+              </v-card-text>
+            </v-card>
+          </v-col>
+        </v-row>
+
+        <!-- Model Performance -->
+        <v-row dense class="mt-2">
+          <v-col cols="12" md="8">
+            <v-card color="grey-darken-3" variant="flat">
+              <v-card-title class="text-body-1 font-weight-bold">
+                <v-icon size="small" class="mr-1">mdi-chart-bar</v-icon>
+                Model Performance
+              </v-card-title>
+              <v-card-text>
+                <v-table density="compact" theme="dark">
+                  <thead>
+                    <tr>
+                      <th>Model</th>
+                      <th class="text-center">Calls</th>
+                      <th class="text-center">Pass</th>
+                      <th class="text-center">Fail</th>
+                      <th class="text-center">Pass Rate</th>
+                      <th class="text-center">Avg Latency</th>
+                      <th class="text-center">Avg Confidence</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    <tr v-for="m in modelStats" :key="m.model">
+                      <td>
+                        <v-chip :color="tierColor(m.tier)" size="x-small" variant="flat" class="mr-1">T{{ m.tier }}</v-chip>
+                        {{ m.model }}
+                      </td>
+                      <td class="text-center">{{ m.calls }}</td>
+                      <td class="text-center text-green">{{ m.pass }}</td>
+                      <td class="text-center text-red">{{ m.fail }}</td>
+                      <td class="text-center">
+                        <v-chip :color="m.passRate >= 80 ? 'green' : m.passRate >= 60 ? 'orange' : 'red'"
+                                size="x-small" variant="flat">
+                          {{ m.passRate }}%
+                        </v-chip>
+                      </td>
+                      <td class="text-center text-grey-lighten-1">{{ m.avgLatency }}ms</td>
+                      <td class="text-center text-grey-lighten-1">{{ m.avgConfidence }}</td>
+                    </tr>
+                  </tbody>
+                </v-table>
+              </v-card-text>
+            </v-card>
+          </v-col>
+
+          <!-- Selector State -->
+          <v-col cols="12" md="4">
+            <v-card color="grey-darken-3" variant="flat">
+              <v-card-title class="text-body-1 font-weight-bold">
+                <v-icon size="small" class="mr-1">mdi-state-machine</v-icon>
+                Selector State
+              </v-card-title>
+              <v-card-text>
+                <v-list density="compact" bg-color="transparent">
+                  <v-list-item>
+                    <template v-slot:prepend><v-icon size="small" color="blue">mdi-layers</v-icon></template>
+                    <v-list-item-title>Current Tier</v-list-item-title>
+                    <template v-slot:append>
+                      <v-chip :color="tierColor(selector.current_tier)" size="small" variant="flat">
+                        Tier {{ selector.current_tier }} ({{ selector.current_tier_label }})
+                      </v-chip>
+                    </template>
+                  </v-list-item>
+                  <v-list-item>
+                    <template v-slot:prepend><v-icon size="small" color="orange">mdi-flask</v-icon></template>
+                    <v-list-item-title>Trial Tier</v-list-item-title>
+                    <template v-slot:append>
+                      <v-chip :color="selector.trial_tier ? 'orange' : 'grey'" size="small" variant="flat">
+                        {{ selector.trial_tier ? 'Tier ' + selector.trial_tier : 'None' }}
+                      </v-chip>
+                    </template>
+                  </v-list-item>
+                  <v-list-item>
+                    <template v-slot:prepend><v-icon size="small" :color="selector.locked ? 'red' : 'green'">mdi-lock</v-icon></template>
+                    <v-list-item-title>Demotion</v-list-item-title>
+                    <template v-slot:append>
+                      <v-chip :color="selector.locked ? 'red' : 'green'" size="small" variant="flat">
+                        {{ selector.locked ? 'Locked' : 'Active' }}
+                      </v-chip>
+                    </template>
+                  </v-list-item>
+                </v-list>
+              </v-card-text>
+            </v-card>
+
+            <!-- Providers -->
+            <v-card color="grey-darken-3" variant="flat" class="mt-2">
+              <v-card-title class="text-body-1 font-weight-bold">
+                <v-icon size="small" class="mr-1">mdi-cloud</v-icon>
+                Providers
+              </v-card-title>
+              <v-card-text>
+                <v-chip v-for="(count, provider) in health.providers" :key="provider"
+                        :color="failedBackends.includes(provider) ? 'red' : 'green'"
+                        size="small" variant="flat" class="mr-1 mb-1">
+                  <v-icon size="x-small" start :icon="failedBackends.includes(provider) ? 'mdi-alert' : 'mdi-check'"></v-icon>
+                  {{ provider }} ({{ count }})
+                </v-chip>
+              </v-card-text>
+            </v-card>
+          </v-col>
+        </v-row>
+
+        <!-- Recent Grades -->
+        <v-row dense class="mt-2">
+          <v-col cols="12">
+            <v-card color="grey-darken-3" variant="flat">
+              <v-card-title class="text-body-1 font-weight-bold">
+                <v-icon size="small" class="mr-1">mdi-clipboard-check</v-icon>
+                Recent Grades
+              </v-card-title>
+              <v-card-text>
+                <v-table density="compact" theme="dark">
+                  <thead>
+                    <tr>
+                      <th>Time</th>
+                      <th>Model</th>
+                      <th class="text-center">Grade</th>
+                      <th class="text-center">Confidence</th>
+                      <th>Reason</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    <tr v-for="g in recentGrades" :key="g.graded_at + g.message_index">
+                      <td class="text-grey-lighten-1 text-caption">{{ formatTime(g.graded_at) }}</td>
+                      <td>{{ g.model_used }}</td>
+                      <td class="text-center">
+                        <v-chip :color="g.grade === 'pass' ? 'green' : g.grade === 'fail' ? 'red' : 'orange'"
+                                size="x-small" variant="flat">
+                          {{ g.grade }}
+                        </v-chip>
+                      </td>
+                      <td class="text-center">{{ g.confidence.toFixed(1) }}</td>
+                      <td class="text-grey-lighten-1 text-caption">{{ g.reason }}</td>
+                    </tr>
+                  </tbody>
+                </v-table>
+              </v-card-text>
+            </v-card>
+          </v-col>
+        </v-row>
+
+        <v-row dense class="mt-1">
+          <v-col cols="12" class="text-center">
+            <span class="text-grey text-caption">Auto-refreshes every 30s | Last updated: {{ lastUpdated }}</span>
+          </v-col>
+        </v-row>
+      </v-container>
+    </v-main>
+  </v-app>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/vue@3.3.9/dist/vue.global.prod.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/vuetify@3.4.0/dist/vuetify.min.js"></script>
+<script>
+const { createApp } = Vue
+const { createVuetify } = Vuetify
+
+const app = createApp({
+  data() {
+    return {
+      loading: false,
+      health: {},
+      modelStats: [],
+      recentGrades: [],
+      selector: { current_tier: 1, current_tier_label: 'flagship', trial_tier: null, locked: false },
+      failedBackends: [],
+      lastUpdated: '',
+      refreshInterval: null,
+    }
+  },
+  computed: {
+    summaryCards() {
+      const totalCalls = this.modelStats.reduce((s, m) => s + m.calls, 0)
+      const totalPass = this.modelStats.reduce((s, m) => s + m.pass, 0)
+      const totalFail = this.modelStats.reduce((s, m) => s + m.fail, 0)
+      const overallRate = totalCalls > 0 ? Math.round((totalPass / (totalPass + totalFail || 1)) * 100) : 0
+      return [
+        { label: 'Total Calls', value: totalCalls, color: 'text-blue-lighten-2' },
+        { label: 'Models Active', value: this.health.total_models || 0, color: 'text-green-lighten-2' },
+        { label: 'Overall Pass Rate', value: overallRate + '%', color: overallRate >= 80 ? 'text-green-lighten-2' : 'text-orange-lighten-2' },
+        { label: 'Grades Recorded', value: this.recentGrades.length, color: 'text-purple-lighten-2' },
+      ]
+    },
+  },
+  methods: {
+    tierColor(tier) {
+      return { 1: 'blue', 2: 'purple', 3: 'teal', 4: 'orange', 5: 'grey' }[tier] || 'grey'
+    },
+    formatTime(iso) {
+      if (!iso) return ''
+      const d = new Date(iso)
+      return d.toLocaleTimeString()
+    },
+    async refresh() {
+      this.loading = true
+      try {
+        const [healthRes, statsRes] = await Promise.all([
+          fetch('/health').then(r => r.json()),
+          fetch('/api/stats').then(r => r.json()),
+        ])
+        this.health = healthRes
+        this.modelStats = statsRes.models || []
+        this.recentGrades = statsRes.recent_grades || []
+        this.selector = statsRes.selector || this.selector
+        this.failedBackends = statsRes.failed_backends || []
+        this.lastUpdated = new Date().toLocaleTimeString()
+      } catch (e) {
+        console.error('Refresh failed:', e)
+      }
+      this.loading = false
+    },
+  },
+  mounted() {
+    this.refresh()
+    this.refreshInterval = setInterval(() => this.refresh(), 30000)
+  },
+  beforeUnmount() {
+    clearInterval(this.refreshInterval)
+  },
+})
+
+app.use(createVuetify({ theme: { defaultTheme: 'dark' } }))
+app.mount('#app')
+</script>
+</body>
+</html>

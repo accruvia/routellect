@@ -735,3 +735,85 @@ class ProxyRoutes:
             "providers": providers,
             "total_models": len(self._models),
         })
+
+    async def api_stats(self, request: Request) -> JSONResponse:
+        """GET /api/stats — model performance data for the dashboard."""
+        from routellect.proxy._grades_db import query_model_stats, query_recent_grades
+        from routellect.proxy._provider_registry import get_model_tier, TIER_LABELS
+
+        # Per-model stats from grades
+        grade_stats = query_model_stats()
+        grade_map: dict[str, dict] = {}
+        for row in grade_stats:
+            model = row["model_used"]
+            if model not in grade_map:
+                grade_map[model] = {"model": model, "provider": row["provider"], "pass": 0, "fail": 0, "mixed": 0, "total_confidence": 0, "grade_count": 0}
+            g = grade_map[model]
+            g[row["grade"]] = row["count"]
+            g["total_confidence"] += row["avg_confidence"] * row["count"]
+            g["grade_count"] += row["count"]
+
+        # Per-model call counts and latency from routing_log
+        import sqlite3
+        from routellect.proxy._grades_db import _get_db
+        conn = _get_db()
+        try:
+            call_rows = conn.execute(
+                "SELECT model_used, provider, COUNT(*) as calls, AVG(latency_ms) as avg_latency "
+                "FROM routing_log GROUP BY model_used, provider"
+            ).fetchall()
+        finally:
+            conn.close()
+
+        call_map = {r["model_used"]: {"calls": r["calls"], "avg_latency": int(r["avg_latency"] or 0)} for r in call_rows}
+
+        models = []
+        all_model_ids = set(grade_map.keys()) | set(call_map.keys())
+        for model_id in sorted(all_model_ids):
+            gm = grade_map.get(model_id, {})
+            cm = call_map.get(model_id, {"calls": 0, "avg_latency": 0})
+            provider = gm.get("provider", "")
+            if not provider:
+                for m in self._models:
+                    if m.model_id == model_id:
+                        provider = m.provider
+                        break
+            p = gm.get("pass", 0)
+            f = gm.get("fail", 0)
+            total_graded = p + f + gm.get("mixed", 0)
+            pass_rate = round(p / max(p + f, 1) * 100)
+            avg_conf = round(gm.get("total_confidence", 0) / max(gm.get("grade_count", 1), 1), 2)
+            tier = get_model_tier(provider, model_id)
+
+            models.append({
+                "model": model_id,
+                "provider": provider,
+                "tier": tier,
+                "calls": cm["calls"],
+                "pass": p,
+                "fail": f,
+                "mixed": gm.get("mixed", 0),
+                "passRate": pass_rate,
+                "avgLatency": cm["avg_latency"],
+                "avgConfidence": avg_conf,
+            })
+
+        models.sort(key=lambda m: (m["tier"], -m["calls"]))
+
+        # Selector state
+        selector = self.selector
+        sel_state = {
+            "current_tier": getattr(selector, "current_tier", 1),
+            "current_tier_label": TIER_LABELS.get(getattr(selector, "current_tier", 1), "unknown"),
+            "trial_tier": getattr(selector, "trial_tier", None),
+            "locked": getattr(selector, "locked", False),
+        }
+
+        recent = query_recent_grades(limit=20)
+
+        return JSONResponse({
+            "models": models,
+            "recent_grades": recent,
+            "selector": sel_state,
+            "failed_backends": [],
+        })
