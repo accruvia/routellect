@@ -664,30 +664,32 @@ class ProxyRoutes:
         """Stream an Anthropic-format response."""
         import httpx
 
+        # If circuit breaker knows this provider is down, fail fast.
+        if not self.circuit_breaker.is_available(decision.backend):
+            raise _ProviderDownError(f"{decision.backend}: circuit breaker open")
+
+        # Open the connection and check status BEFORE returning StreamingResponse.
+        client = httpx.AsyncClient(timeout=120)
+        req = client.build_request("POST", "https://api.anthropic.com/v1/messages",
+                                    json=body, headers=headers)
+        resp = await client.send(req, stream=True)
+
+        if resp.status_code >= 400:
+            error_body = await resp.aread()
+            await resp.aclose()
+            await client.aclose()
+            error_text = error_body.decode(errors="replace")
+            if _is_provider_down(error_text):
+                raise _ProviderDownError(f"{decision.backend}: {error_text[:200]}")
+            # Non-provider-down error — return it as JSON
+            return JSONResponse(json.loads(error_text), status_code=resp.status_code)
+
         collected_content: list[str] = []
         stream_usage: dict[str, int] = {"input_tokens": 0, "output_tokens": 0}
 
         async def event_generator():
             try:
-                async with httpx.AsyncClient(timeout=120) as client:
-                    async with client.stream(
-                        "POST",
-                        "https://api.anthropic.com/v1/messages",
-                        json=body,
-                        headers=headers,
-                    ) as resp:
-                        # Check for error response (non-SSE)
-                        if resp.status_code >= 400:
-                            error_body = b""
-                            async for chunk in resp.aiter_bytes():
-                                error_body += chunk
-                                if len(error_body) > 1000:
-                                    break
-                            error_text = error_body.decode(errors="replace")
-                            if _is_provider_down(error_text):
-                                raise _ProviderDownError(f"{decision.backend}: {error_text[:200]}")
-                            return
-                        async for line in resp.aiter_lines():
+                async for line in resp.aiter_lines():
                             if line.startswith("data: "):
                                 try:
                                     chunk = json.loads(line[6:])
@@ -727,6 +729,8 @@ class ProxyRoutes:
                     input_tokens=stream_usage["input_tokens"],
                     output_tokens=stream_usage["output_tokens"],
                 )
+                await resp.aclose()
+                await client.aclose()
 
         resp_headers = {
             "x-routellect-model": decision.model_id,
