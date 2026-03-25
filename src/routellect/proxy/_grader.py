@@ -217,8 +217,16 @@ class Grader:
 
     def _parse_grades(self, raw: str, buf: SessionBuffer) -> list[GradeRecord]:
         """Parse the grader's JSON response into GradeRecords."""
+        # Strip thinking blocks (Gemini wraps output in <thinking> tags)
+        import re
+        text = re.sub(
+            r"<thinking>.*?</thinking>\s*"
+            r"|<thought>.*?</thought>\s*"
+            r"|<reasoning>.*?</reasoning>\s*",
+            "", raw, flags=re.DOTALL | re.IGNORECASE,
+        ).strip()
+
         # Strip markdown code fences if present
-        text = raw.strip()
         if text.startswith("```"):
             text = text.split("\n", 1)[-1]
         if text.endswith("```"):
